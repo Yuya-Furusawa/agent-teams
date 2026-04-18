@@ -69,10 +69,13 @@ export const PLAN_JSON_SCHEMA = {
 export function buildPlannerPrompt(opts: {
   task: string;
   cwd: string;
-  workerRoster: Array<{ name: string; description?: string }>;
+  workerRoster: Array<{ name: string; role?: string; description?: string }>;
 }): string {
   const roster = opts.workerRoster
-    .map((w) => `- ${w.name}${w.description ? `: ${w.description}` : ""}`)
+    .map((w) => {
+      const label = w.role ? `${w.name} (role: ${w.role})` : w.name;
+      return `- ${label}${w.description ? ` — ${w.description}` : ""}`;
+    })
     .join("\n");
   return `
 You are the planner for a team of coding agents. Decompose the user's task into 2–4 focused sub-tasks, then choose which worker agent is best suited for each.
@@ -111,13 +114,19 @@ Do not assign agents that are not in the roster. Do not wrap the JSON in any add
 export function buildSummaryPrompt(opts: {
   task: string;
   cwd: string;
-  subTaskReports: Array<{ title: string; agent: string; status: string; report: string }>;
+  subTaskReports: Array<{
+    title: string;
+    agent: string;
+    role?: string;
+    status: string;
+    report: string;
+  }>;
 }): string {
   const sections = opts.subTaskReports
     .map(
       (r, i) => `
 ## Sub-task ${i + 1}: ${r.title}
-- Agent: ${r.agent}
+- Agent: ${r.role ? `${r.agent} (role: ${r.role})` : r.agent}
 - Status: ${r.status}
 
 ### Report

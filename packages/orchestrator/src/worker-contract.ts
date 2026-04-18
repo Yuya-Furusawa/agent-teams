@@ -1,4 +1,10 @@
-export function buildWorkerAppendedSystemPrompt(reportPath: string): string {
+export function buildWorkerAppendedSystemPrompt(
+  reportPath: string,
+  agentName?: string,
+): string {
+  const signature = agentName
+    ? `Sign the report with "— ${agentName}" on its last line so the summarizer can attribute it.`
+    : "";
   return `
 # Team reporting protocol
 You are running as one worker in a coordinated team of coding agents. When you are done with your assigned sub-task, you MUST finish by writing a concise markdown report to this exact path using your filesystem tools:
@@ -10,7 +16,7 @@ The report should include:
 - "What was done" (bullet list of concrete changes)
 - "Files touched" (paths)
 - "Follow-ups / blockers" (anything the summarizer or reviewer should know)
-
+${signature ? `\n${signature}\n` : ""}
 After the report is written, your final assistant message can be short ("Report written to ${reportPath}"). Do not ask clarifying questions of a human; make your best judgment call and document the assumption in the report.
 `.trim();
 }

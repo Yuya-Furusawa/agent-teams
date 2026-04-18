@@ -23,9 +23,16 @@ import {
 } from "@agent-teams/storage";
 import { join } from "node:path";
 import { ulid } from "ulid";
+import { loadAgentRegistry } from "./agent-registry.js";
+import {
+  buildInstanceInlineAgents,
+  resolvePlannerInstance,
+  resolveTeam,
+  type AgentInstance,
+} from "./instance.js";
 import { runPlanner, runSummarizer } from "./planner-runner.js";
 import type { SubTaskPlan } from "./planner-schema.js";
-import { loadTeam, type Team } from "./team.js";
+import { loadTeam, validateTeamAgainstRegistry } from "./team.js";
 
 const SPLIT_CYCLE: SplitDirection[] = ["right", "down", "right", "down"];
 const DEFAULT_MAX_PARALLEL = 3;
@@ -46,6 +53,15 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   const cwd = opts.cwd ?? process.cwd();
   const teamPath = opts.teamPath ?? `${cwd}/agent-team.yaml`;
   const team = loadTeam(teamPath);
+
+  const registry = loadAgentRegistry();
+  validateTeamAgainstRegistry(team, registry);
+  const workerInstances = resolveTeam(team, registry);
+  const plannerInstance = resolvePlannerInstance(team, registry);
+  const instancesByName = new Map(workerInstances.map((i) => [i.name, i]));
+  const inlineAgents = buildInstanceInlineAgents([...workerInstances, plannerInstance]);
+  const roleOf = (name: string): string | undefined =>
+    instancesByName.get(name)?.role;
 
   const storage = new Storage();
   const taskId = ulid();
@@ -73,7 +89,14 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       task: opts.description,
       cwd,
       team,
+      plannerAgentName: plannerInstance.name,
+      workers: workerInstances.map((i) => ({
+        name: i.name,
+        role: i.role,
+        description: i.description,
+      })),
       eventsPath: join(taskDir(taskId), "planner-events.jsonl"),
+      inlineAgents,
     });
 
     if (workspace) {
@@ -162,6 +185,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
     const subTaskReports = subTasks.map(({ id, plan: sub }) => ({
       title: sub.title,
       agent: sub.assignedAgent,
+      role: roleOf(sub.assignedAgent),
       status: storage.db
         .prepare("SELECT status FROM sub_tasks WHERE id = ?")
         .pluck()
@@ -174,7 +198,9 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       cwd,
       team,
       subTaskReports,
+      plannerAgentName: plannerInstance.name,
       eventsPath: join(taskDir(taskId), "summarizer-events.jsonl"),
+      inlineAgents,
     });
     writeSummary(taskId, summary.summary);
 

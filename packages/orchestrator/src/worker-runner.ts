@@ -1,4 +1,4 @@
-import { AgentRunner, type StreamJsonEvent } from "@agent-teams/agent-runner";
+import { AgentRunner, type InlineAgentDefinition, type StreamJsonEvent } from "@agent-teams/agent-runner";
 import {
   appendEvent,
   initAgentDir,
@@ -19,6 +19,7 @@ export interface WorkerRunParams {
   rationale?: string;
   cwd: string;
   model?: string;
+  inlineAgents: Record<string, InlineAgentDefinition>;
 }
 
 export async function runWorker(params: WorkerRunParams): Promise<{
@@ -42,10 +43,11 @@ export async function runWorker(params: WorkerRunParams): Promise<{
       agent: params.agent,
       prompt,
       cwd: params.cwd,
-      appendSystemPrompt: buildWorkerAppendedSystemPrompt(path),
+      appendSystemPrompt: buildWorkerAppendedSystemPrompt(path, params.agent),
       includeHookEvents: true,
       permissionMode: "bypassPermissions",
       model: params.model,
+      inlineAgents: params.inlineAgents,
       onEvent: (event: StreamJsonEvent) => {
         appendEvent(params.taskId, params.subTaskId, event);
       },

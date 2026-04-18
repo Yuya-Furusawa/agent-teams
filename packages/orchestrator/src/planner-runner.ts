@@ -1,4 +1,4 @@
-import { AgentRunner, type StreamJsonEvent } from "@agent-teams/agent-runner";
+import { AgentRunner, type InlineAgentDefinition, type StreamJsonEvent } from "@agent-teams/agent-runner";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -24,25 +24,29 @@ export async function runPlanner(opts: {
   task: string;
   cwd: string;
   team: Team;
+  plannerAgentName: string;
+  workers: Array<{ name: string; role?: string; description?: string }>;
   eventsPath?: string;
+  inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
 }): Promise<TaskPlan> {
   const prompt = buildPlannerPrompt({
     task: opts.task,
     cwd: opts.cwd,
-    workerRoster: opts.team.workers.map((name) => ({ name })),
+    workerRoster: opts.workers,
   });
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
   const runner = new AgentRunner();
   const result = await runner.run({
-    agent: opts.team.planner,
+    agent: opts.plannerAgentName,
     prompt,
     cwd: opts.cwd,
     includeHookEvents: false,
     permissionMode: "bypassPermissions",
     model: opts.team.defaults?.model,
+    inlineAgents: opts.inlineAgents,
     onEvent: (event) => {
       fileLogger?.(event);
       opts.onEvent?.(event);
@@ -59,10 +63,11 @@ export async function runPlanner(opts: {
   }
   const parsed = TaskPlanSchema.parse(result.parsedJson);
 
+  const allowed = new Set(opts.workers.map((w) => w.name));
   for (const sub of parsed.subTasks) {
-    if (!opts.team.workers.includes(sub.assignedAgent)) {
+    if (!allowed.has(sub.assignedAgent)) {
       throw new Error(
-        `planner assigned agent "${sub.assignedAgent}" which is not in the roster: ${opts.team.workers.join(", ")}`,
+        `planner assigned agent "${sub.assignedAgent}" which is not in the roster: ${[...allowed].join(", ")}`,
       );
     }
   }
@@ -73,8 +78,16 @@ export async function runSummarizer(opts: {
   task: string;
   cwd: string;
   team: Team;
-  subTaskReports: Array<{ title: string; agent: string; status: string; report: string }>;
+  plannerAgentName: string;
+  subTaskReports: Array<{
+    title: string;
+    agent: string;
+    role?: string;
+    status: string;
+    report: string;
+  }>;
   eventsPath?: string;
+  inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
 }): Promise<{ summary: string; status: string }> {
   const prompt = buildSummaryPrompt({
@@ -87,12 +100,13 @@ export async function runSummarizer(opts: {
 
   const runner = new AgentRunner();
   const result = await runner.run({
-    agent: opts.team.planner,
+    agent: opts.plannerAgentName,
     prompt,
     cwd: opts.cwd,
     includeHookEvents: false,
     permissionMode: "bypassPermissions",
     model: opts.team.defaults?.model,
+    inlineAgents: opts.inlineAgents,
     onEvent: (event) => {
       fileLogger?.(event);
       opts.onEvent?.(event);
