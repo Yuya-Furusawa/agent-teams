@@ -1,5 +1,12 @@
 #!/usr/bin/env node
-import { runWorker, loadTeam } from "@agent-teams/orchestrator";
+import {
+  buildInstanceInlineAgents,
+  loadAgentRegistry,
+  loadTeam,
+  resolvePlannerInstance,
+  resolveTeam,
+  runWorker,
+} from "@agent-teams/orchestrator";
 import { Storage } from "@agent-teams/storage";
 import { Command } from "commander";
 
@@ -38,28 +45,43 @@ program
         process.exit(1);
       }
 
-      let teamModel: string | undefined;
-      try {
-        const team = loadTeam(`${task.cwd}/agent-team.yaml`);
-        teamModel = team.defaults?.model;
-      } catch {
-        // team file might have moved; proceed without model override
+      const team = loadTeam(`${task.cwd}/agent-team.yaml`);
+      const registry = loadAgentRegistry();
+      const workerInstances = resolveTeam(team, registry);
+      const plannerInstance = resolvePlannerInstance(team, registry);
+      const inlineAgents = buildInstanceInlineAgents([
+        ...workerInstances,
+        plannerInstance,
+      ]);
+
+      const instance = workerInstances.find((i) => i.name === subTask.assigned_agent);
+      if (!instance) {
+        console.error(
+          `no worker "${subTask.assigned_agent}" in team ${team.name}`,
+        );
+        process.exit(1);
       }
 
-      console.log(`[agent-teams] starting worker ${subTask.assigned_agent} for sub-task: ${subTask.title}`);
+      const roleLabel = instance.role ? ` (role ${instance.role})` : "";
+      console.log(
+        `[agent-teams] starting ${instance.name}${roleLabel} for sub-task: ${subTask.title}`,
+      );
 
       const { exitCode, reportPath } = await runWorker({
         taskId,
         subTaskId,
-        agent: subTask.assigned_agent,
+        agent: instance.name,
         originalTask: task.description,
         subTaskTitle: subTask.title,
         subTaskPrompt: subTask.prompt,
         cwd: task.cwd,
-        model: teamModel,
+        model: team.defaults?.model,
+        inlineAgents,
       });
 
-      console.log(`[agent-teams] worker exited with code ${exitCode}. report: ${reportPath}`);
+      console.log(
+        `[agent-teams] ${instance.name} exited with code ${exitCode}. report: ${reportPath}`,
+      );
       process.exit(exitCode === 0 ? 0 : 2);
     } finally {
       storage.close();
