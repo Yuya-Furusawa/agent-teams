@@ -6,6 +6,11 @@ export type StreamJsonEvent = {
   [key: string]: unknown;
 };
 
+export interface InlineAgentDefinition {
+  description: string;
+  prompt: string;
+}
+
 export interface RunAgentOptions {
   agent: string;
   prompt: string;
@@ -20,6 +25,7 @@ export interface RunAgentOptions {
   addDirs?: string[];
   includeHookEvents?: boolean;
   claudeBinary?: string;
+  inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
   onStderr?: (chunk: string) => void;
 }
@@ -62,6 +68,9 @@ export class AgentRunner extends EventEmitter {
     }
     if (opts.addDirs && opts.addDirs.length > 0) {
       args.push("--add-dir", ...opts.addDirs);
+    }
+    if (opts.inlineAgents && Object.keys(opts.inlineAgents).length > 0) {
+      args.push("--agents", JSON.stringify(opts.inlineAgents));
     }
 
     const child = spawn(bin, args, {
