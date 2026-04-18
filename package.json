@@ -1,0 +1,29 @@
+{
+  "name": "agent-teams",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Orchestrate multiple Claude Code instances as a coding team, observed through cmux panes",
+  "license": "MIT",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "dev:cli": "tsx packages/cli/src/index.ts",
+    "dev:worker": "tsx packages/cli/src/internal-worker.ts",
+    "lint": "tsc --build --dry"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
+}

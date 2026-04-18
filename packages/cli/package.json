@@ -1,0 +1,20 @@
+{
+  "name": "@agent-teams/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "agent-teams": "dist/index.js",
+    "agent-teams-internal": "dist/internal-worker.js"
+  },
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@agent-teams/orchestrator": "workspace:*",
+    "@agent-teams/storage": "workspace:*",
+    "commander": "^12.1.0"
+  }
+}

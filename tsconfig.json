@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/cmux-adapter" },
+    { "path": "packages/storage" },
+    { "path": "packages/agent-runner" },
+    { "path": "packages/orchestrator" },
+    { "path": "packages/cli" }
+  ]
+}
