@@ -13,11 +13,14 @@ Invoked from a Claude Code session via slash command `/team "<task>"` → `agent
 ## Layout (pnpm monorepo)
 
 ```
+agents/           # bundled sub-agent definitions (.md, YAML frontmatter + system prompt body)
+                  #   auto-injected into every `claude -p` run via --agents <json>
+                  #   override location with $AGENT_TEAMS_AGENTS_DIR
 packages/
   cmux-adapter/   # cmux CLI wrapper (currentWorkspace, newTerminalPane, send, …)
   storage/        # SQLite (tasks/sub_tasks/agent_runs) + files (events.jsonl, report.md)
   agent-runner/   # spawns `claude -p --output-format stream-json`, parses events
-  orchestrator/   # team loader, planner runner, worker dispatch, summarizer
+  orchestrator/   # team loader, agent-registry loader, planner runner, worker dispatch, summarizer
   cli/            # `agent-teams` + `agent-teams-internal worker` bins
 commands/team.md  # slash command template (symlinked to ~/.claude/commands/ by setup.sh)
 setup.sh          # scaffold + symlink installer; supports --dry-run / --yes
@@ -60,13 +63,61 @@ Passing a pane ref to `--surface` produces `invalid_params: Surface is not a ter
 
 ## Planner/summarizer JSON contract
 
-The planner is instructed (via `--append-system-prompt`) to close its response with a single fenced ```json``` code block. The parser in `agent-runner` tries, in order:
+The planner is instructed (via the user-prompt wording and the `team-planner` agent's system prompt) to close its response with a single fenced ```json``` code block. The parser in `agent-runner` tries, in order:
 
 1. `result` event payload (when `claude -p` emits structured output)
 2. Last fenced ```json block in the final assistant text
 3. First `{ ... }` substring in the final text
 
-If the configured planner has a narrative-heavy preset (e.g. the built-in `Plan` architect), it may ignore the JSON instruction. The sample `agent-team.yaml` defaults to `general-purpose` for this reason.
+The sample `agent-team.yaml` defaults to `planner: team-planner` — a dedicated bundled agent whose system prompt reinforces the JSON contract. Built-in narrative agents (e.g. `Plan`) tend to ignore the contract; avoid them in the `planner` slot.
+
+## Bundled agents (auto-injected)
+
+`agents/<name>.md` files are loaded at runtime by `packages/orchestrator/src/agent-registry.ts` and passed to every `claude -p` invocation via `--agents <json>`. Result: workspaces that use `agent-teams` never need to copy agent definitions into `.claude/agents/`.
+
+To add or edit an agent, just touch the markdown under `agents/` — **no rebuild needed** for content changes (TS code doesn't import from those files). `loadAgentRegistry()` reads them fresh on every run.
+
+Built-in Claude agents (`general-purpose`, `Explore`, `Plan`, `statusline-setup`) are also accepted as team members — `validateTeamAgainstRegistry` allow-lists them.
+
+## Agent model
+
+Each agent is an **independent** markdown file at `agents/<Name>.md`. The filename must match the frontmatter `name`. The `name` is the routing key used everywhere (team.yaml, planner output, `--agents` JSON key, cmux pane tab, report signature).
+
+Frontmatter fields (all optional except `name` and the body):
+- `name` — identifier (= filename, = display, = routing key). Unique across all files.
+- `role` — metadata string. Multiple agents may share a role (e.g. three implementers share `role: implementer`).
+- `personality` — short trait paragraph injected as a `# Personality` section into the system prompt.
+- `description` — "when to use / when not to use" paragraph read by the planner.
+- `model` / `tools` — optional, pass-through to the inline agent definition.
+
+### Injection pipeline
+
+`buildInstanceInlineAgents()` in `instance.ts` wraps each agent's body with:
+
+```
+You are <name>, a member of a coordinated coding-agent team. Your role on the team is "<role>". Sign any report…
+
+# Personality
+<personality>
+
+<body from agents/<name>.md>
+```
+
+The planner, summarizer, and every worker receive the **same** inline agents map (keyed by `name`), so cross-agent references resolve uniformly.
+
+### Where each field surfaces
+
+- `name` → cmux pane tab title, planner roster entries, `sub_tasks.assigned_agent` column, report signature
+- `role` → planner roster text ("`Kai (role: implementer)`"), summarizer report sections, orchestrator's `roleOf()` lookup
+- `personality` → only inside the injected system prompt (not user-visible metadata)
+
+### Why independent files per agent
+
+Earlier designs shared a role body across personas and overrode just persona + personality via `team.yaml` object form. We moved to one-file-per-agent because each persona needs its own body to encode distinct working style — Aki's body should emphasize reading before writing, Mika's body should enforce test-first discipline, etc. Personality alone can't carry that without the body backing it up.
+
+### Default roster
+
+11 agents: 1 planner (Sage) + 10 workers. Kai/Aki/Mika (role: implementer), Iris (code-reviewer), Quinn (qa-engineer), Ren (researcher), Nova (browser-operator), Juno (debugger), Atlas (devops-engineer), Lin (docs-writer).
 
 ## Data layout
 

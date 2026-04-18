@@ -60,19 +60,89 @@ agent-teams run "add a hello-world section to the README"
 
 ```yaml
 name: default-dev-team
-planner: general-purpose
+planner: Sage
 workers:
-  - Explore
-  - general-purpose
-  - superpowers:code-reviewer
+  # Each entry is an agent by name. The file agents/<Name>.md must exist.
+  - Kai      # pragmatic implementer
+  - Aki      # architecture-minded implementer
+  - Mika     # test-first implementer
+  - Iris     # code reviewer
+  - Quinn    # QA engineer
+  - Ren      # researcher
+  - Nova     # browser / E2E
+  - Juno     # debugger
+  - Atlas    # DevOps / infra
+  - Lin      # documentation writer
 defaults:
-  maxParallel: 3
+  maxParallel: 4
   # model: claude-opus-4-7
 ```
 
-`planner` and each `workers[]` name must match something in `claude agents list`.
+### Multiple agents sharing a role
 
-**Planner choice matters**: the orchestrator asks the planner to emit a fenced JSON code block as the last message, and parses it. Agents with narrative-heavy system prompts (e.g. the built-in `Plan` architect) may ignore this contract. `general-purpose` follows it reliably.
+Each agent is its own file under `agents/<Name>.md`. Frontmatter can carry a `role:` tag which is metadata only — several agents can share the same role. In the default team, `Kai`, `Aki`, and `Mika` are three independent agents that all declare `role: implementer` but have distinct personalities and body prompts.
+
+- The **file name must match** the frontmatter `name`. `agents/Kai.md` has `name: Kai`.
+- Duplicate `name`s across files are rejected at load time.
+- The planner picks between agents by name — it sees the full list with each agent's description and personality, and outputs `assignedAgent: "Kai"` (or `"Aki"`, etc.).
+
+### Where agent definitions come from
+
+The repository ships a set of agents under [`agents/`](agents/). Each is a markdown file with YAML frontmatter (`name`, `description`) plus a system-prompt body.
+
+At every invocation the orchestrator reads this directory and passes the agents to `claude -p` via `--agents <json>`. **You do not need to install the agents into the workspace's `.claude/agents/` directory** — they are auto-injected per-run.
+
+Agent names in `agent-team.yaml` resolve in this order:
+1. definitions in `<agent-teams-repo>/agents/` (auto-injected)
+2. Claude Code built-ins (`general-purpose`, `Explore`, `Plan`, `statusline-setup`)
+3. user-scope `~/.claude/agents/*.md`
+
+Override the lookup path with `AGENT_TEAMS_AGENTS_DIR=/custom/path` if you want to swap the roster per environment.
+
+### Agents, roles, and personalities
+
+Every bundled agent file has:
+- **`name`** (e.g. `Kai`) — the agent's identifier. Must match the filename (`agents/Kai.md`). Used as the routing key in `agent-team.yaml` and in planner output.
+- **`role`** (e.g. `implementer`) — optional metadata grouping agents with similar charters. Multiple agents can share a role (three implementers share `role: implementer`).
+- **`personality`** — optional short paragraph describing temperament and working style. Injected into the system prompt as a `# Personality` section.
+- **`description`** — one-paragraph "when to use / when not to use" that the planner reads to decide who gets which sub-task.
+
+The current roster:
+
+| name | role | one-line personality |
+| --- | --- | --- |
+| Kai | implementer | pragmatic, ships fast, smallest change |
+| Aki | implementer | architecture-minded, reads first, small incremental |
+| Mika | implementer | test-first / TDD |
+| Iris | code-reviewer | sharp-eyed but fair; must-fix vs nice-to-fix |
+| Quinn | qa-engineer | methodical, paranoid about edge cases |
+| Ren | researcher | curious but disciplined, cites evidence |
+| Nova | browser-operator | user-empathetic, hates flaky tests |
+| Juno | debugger | patient and skeptical, roots-not-symptoms |
+| Atlas | devops-engineer | calm, blast-radius-aware |
+| Lin | docs-writer | clear and reader-first |
+| Sage | team-planner | decisive and concise |
+
+### Customizing or adding agents
+
+Edit the existing files under `agents/` or drop a new `<name>.md` there. Frontmatter shape:
+
+```markdown
+---
+name: Rio
+role: implementer
+personality: >
+  Decisive and allergic to abstractions. Prefers two concrete implementations
+  over one speculative interface.
+description: One-paragraph "when to use / when not to use" aimed at the planner.
+---
+
+System-prompt body goes here…
+```
+
+Save as `agents/Rio.md` and add `- Rio` to `agent-team.yaml`'s `workers:` list. `role` and `personality` are optional but strongly recommended — the role helps the planner understand what kind of work the agent does, and the personality steers behavior.
+
+Save the file and you're done — the agents directory is re-read on every `/team` invocation, so no rebuild is needed for markdown edits.
 
 ### Environment variables
 
