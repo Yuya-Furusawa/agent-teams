@@ -2,26 +2,32 @@
 # Place this file at the root of the repository you are dispatching tasks from,
 # or pass its path via `agent-teams run --team <path>`.
 #
-# `planner` and each entry in `workers` must match an agent registered in your
-# Claude Code installation. Run `claude agents list` to see what's available
-# (both built-in agents and sub-agent definitions under ~/.claude/agents/).
+# Each worker is one agent by name. The agent must exist as an independent file
+# at <agent-teams repo>/agents/<name>.md (or be a Claude Code built-in such as
+# general-purpose / Explore / Plan). Multiple agents can share the same `role`
+# in their frontmatter — this is how we get three implementers (Kai, Aki, Mika)
+# with distinct personalities.
 
 name: default-dev-team
 
-# The planner agent decomposes the task and chooses which worker runs each sub-task.
-# It is also reused as the summarizer after all workers finish.
-#
-# NOTE: Prefer an agent whose system prompt does NOT force markdown/narrative output.
-# `general-purpose` follows the "emit a JSON block at the end" contract reliably.
-# `Plan` (built-in architect) tends to return narrative-only plans and can misbehave.
-planner: general-purpose
+planner: Sage
 
-# Worker roster. The planner can only assign sub-tasks to agents in this list.
 workers:
-  - Explore
-  - general-purpose
-  - superpowers:code-reviewer
+  # Implementers — three working styles; the planner picks the right one per
+  # sub-task based on each agent's description.
+  - Kai     # pragmatic, hands-on, smallest change that ships
+  - Aki     # architecture-minded, reads before writing, small incremental PRs
+  - Mika    # test-first / TDD discipline
+
+  # One of each of the other roles.
+  - Iris    # code reviewer
+  - Quinn   # QA engineer (unit / integration tests)
+  - Ren     # researcher
+  - Nova    # browser / E2E operator
+  - Juno    # systematic debugger
+  - Atlas   # DevOps / infra-as-code
+  - Lin     # documentation writer
 
 defaults:
-  # model: claude-opus-4-7   # optional, otherwise each agent's default is used
-  maxParallel: 3
+  # model: claude-opus-4-7
+  maxParallel: 4
