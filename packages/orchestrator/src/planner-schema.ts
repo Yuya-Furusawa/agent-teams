@@ -253,7 +253,15 @@ ${r.report || "(no report captured)"}
   return `
 You are the summarizer for a coding-agent team. Produce a concise, faithful markdown summary of the team run based on each agent's report.
 
-**Write the "summary" value in Japanese (日本語)**. Keep file paths, agent names, code identifiers, and command names verbatim in English — only surrounding prose and section headings should be Japanese. Use these Japanese section headings in the markdown body: \`## 概要\`, \`## 実施内容\`, \`## 申し送り / リスク\`.
+**Write the "summary" value in Japanese (日本語)**. Keep file paths, agent names, code identifiers, and command names verbatim in English — only surrounding prose and section headings should be Japanese. Use these Japanese section headings in the markdown body **in this exact order**: \`## つぶやき\`, \`## 概要\`, \`## 実施内容\`, \`## 申し送り / リスク\`. つぶやき must be the very first section after the top-level heading — it is flavor text meant to be read before the substance.
+
+**つぶやき section**: For each sub-task, extract the agent's \`## つぶやき\` line from their report (a short tweet-style quip in character) and render it as a blockquote in the summary, attributed to the agent. Example:
+\`\`\`
+## つぶやき
+> テスト先に書いたら勝ち確。 — Mika
+> 型が合えば夜ぐっすり眠れる。 — Aki
+\`\`\`
+If an agent omitted the つぶやき section, skip that agent silently — do not fabricate quotes. Preserve the agent's wording verbatim (do not paraphrase or translate).
 
 # Original user task
 ${opts.task}
@@ -270,7 +278,7 @@ Your FINAL assistant message MUST end with a single fenced JSON code block match
 Schema:
 \`\`\`json
 {
-  "summary": "string (日本語の markdown: 見出し + ## 概要 + ## 実施内容 + ## 申し送り / リスク)",
+  "summary": "string (日本語の markdown: 見出し + ## つぶやき + ## 概要 + ## 実施内容 + ## 申し送り / リスク — この順序)",
   "status": "success | partial | failure"
 }
 \`\`\`
