@@ -1,14 +1,8 @@
 import {
   currentWorkspace,
   log as cmuxLog,
-  newTerminalPane,
-  renameTab,
-  sendKey,
-  send,
   setStatus,
   clearStatus,
-  type SurfaceRef,
-  type SplitDirection,
   type WorkspaceRef,
 } from "@agent-teams/cmux-adapter";
 import {
@@ -28,13 +22,11 @@ import {
   buildInstanceInlineAgents,
   resolvePlannerInstance,
   resolveTeam,
-  type AgentInstance,
 } from "./instance.js";
 import { runPlanner, runSummarizer, runTriage } from "./planner-runner.js";
-import type { SubTaskPlan } from "./planner-schema.js";
 import { loadTeam, validateTeamAgainstRegistry } from "./team.js";
+import { runWorker } from "./worker-runner.js";
 
-const SPLIT_CYCLE: SplitDirection[] = ["right", "down", "right", "down"];
 const DEFAULT_MAX_PARALLEL = 3;
 
 export interface RunTaskOptions {
@@ -173,42 +165,51 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
 
     storage.updateTaskStatus(taskId, "running");
 
-    const _maxParallel = team.defaults?.maxParallel ?? DEFAULT_MAX_PARALLEL;
-    if (!workspace) {
-      throw new Error("could not locate active cmux workspace — is cmux running?");
-    }
-    const surfaces = await provisionSurfaces({ workspace, count: subTasks.length });
-
-    await Promise.all(
-      subTasks.map(async (entry, i) => {
-        const surface = surfaces[i];
-        if (!surface) throw new Error(`no surface allocated for sub-task ${i}`);
-        await dispatchWorker({
-          storage,
-          taskId,
-          subTaskId: entry.id,
-          plan: entry.plan,
-          surface,
-          workspace,
-        });
-      }),
-    );
+    const maxParallel = team.defaults?.maxParallel ?? DEFAULT_MAX_PARALLEL;
 
     if (workspace) {
       await setStatus({ workspace, key: "agent-teams", value: "workers running…", icon: "figure.run" });
     }
 
-    await waitForAllSubTasks(storage, taskId, subTasks.length, {
-      onProgress: async (done, total) => {
-        if (workspace) {
-          await setStatus({
-            workspace,
-            key: "agent-teams",
-            value: `${done}/${total} done`,
-            icon: "hourglass",
-          });
-        }
-      },
+    let completed = 0;
+    const reportProgress = async () => {
+      if (!workspace) return;
+      await setStatus({
+        workspace,
+        key: "agent-teams",
+        value: `${completed}/${subTasks.length} done`,
+        icon: "hourglass",
+      });
+    };
+
+    await runWithConcurrency(subTasks, maxParallel, async (entry) => {
+      const runId = ulid();
+      storage.insertAgentRun({
+        id: runId,
+        sub_task_id: entry.id,
+        pane_ref: null,
+        pid: null,
+        started_at: Date.now(),
+      });
+      storage.updateSubTaskStatus(entry.id, "running");
+
+      try {
+        await runWorker({
+          taskId,
+          subTaskId: entry.id,
+          agent: entry.plan.assignedAgent,
+          originalTask: opts.description,
+          subTaskTitle: entry.plan.title,
+          subTaskPrompt: entry.plan.prompt,
+          rationale: entry.plan.rationale,
+          cwd,
+          model: team.defaults?.model,
+          inlineAgents,
+        });
+      } finally {
+        completed++;
+        await reportProgress().catch(() => {});
+      }
     });
 
     if (workspace) {
@@ -258,19 +259,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
     });
 
     if (workspace) {
-      await setStatus({
-        workspace,
-        key: "agent-teams",
-        value: status === "completed" ? "done ✓" : "failed ✗",
-        icon: status === "completed" ? "checkmark.circle" : "xmark.circle",
-        color: status === "completed" ? "#4ade80" : "#ef4444",
-      });
-      await cmuxLog({
-        workspace,
-        source: "agent-teams",
-        level: status === "completed" ? "info" : "error",
-        message: `task ${taskId} ${status}. summary: ${summaryFile(taskId)}`,
-      });
+      await finalizeWorkspaceStatus(workspace, status, summaryFile(taskId), taskId);
     }
 
     return {
@@ -300,75 +289,42 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   }
 }
 
-async function provisionSurfaces(opts: {
-  workspace: WorkspaceRef;
-  count: number;
-}): Promise<SurfaceRef[]> {
-  const created: SurfaceRef[] = [];
-  for (let i = 0; i < opts.count; i++) {
-    const direction = SPLIT_CYCLE[i % SPLIT_CYCLE.length]!;
-    const { surface } = await newTerminalPane({
-      direction,
-      workspace: opts.workspace,
-      type: "terminal",
-    });
-    created.push(surface);
-  }
-  return created;
-}
-
-async function dispatchWorker(opts: {
-  storage: Storage;
-  taskId: string;
-  subTaskId: string;
-  plan: SubTaskPlan;
-  surface: SurfaceRef;
-  workspace: WorkspaceRef;
-}): Promise<void> {
-  const runId = ulid();
-  opts.storage.insertAgentRun({
-    id: runId,
-    sub_task_id: opts.subTaskId,
-    pane_ref: opts.surface,
-    pid: null,
-    started_at: Date.now(),
-  });
-  opts.storage.updateSubTaskStatus(opts.subTaskId, "running");
-
-  await renameTab({
-    workspace: opts.workspace,
-    surface: opts.surface,
-    title: `${opts.plan.assignedAgent} · ${truncate(opts.plan.title, 30)}`,
-  }).catch(() => {});
-  const cmd = `agent-teams-internal worker ${opts.taskId} ${opts.subTaskId}`;
-  await send({ workspace: opts.workspace, surface: opts.surface, text: cmd });
-  await sendKey({ workspace: opts.workspace, surface: opts.surface, key: "Enter" });
-}
-
-async function waitForAllSubTasks(
-  storage: Storage,
+async function finalizeWorkspaceStatus(
+  workspace: WorkspaceRef,
+  status: "completed" | "failed",
+  summaryPath: string,
   taskId: string,
-  expected: number,
-  opts: { onProgress?: (done: number, total: number) => Promise<void> | void; pollMs?: number } = {},
 ): Promise<void> {
-  const pollMs = opts.pollMs ?? 1_000;
-  let lastDone = -1;
-  for (;;) {
-    const rows = storage.db
-      .prepare(`SELECT status FROM sub_tasks WHERE task_id = ?`)
-      .all(taskId) as Array<{ status: string }>;
-    const done = rows.filter((r) => r.status === "completed" || r.status === "failed").length;
-    if (done !== lastDone) {
-      lastDone = done;
-      if (opts.onProgress) await opts.onProgress(done, expected);
-    }
-    if (done >= expected) return;
-    await sleep(pollMs);
-  }
+  await setStatus({
+    workspace,
+    key: "agent-teams",
+    value: status === "completed" ? "done ✓" : "failed ✗",
+    icon: status === "completed" ? "checkmark.circle" : "xmark.circle",
+    color: status === "completed" ? "#4ade80" : "#ef4444",
+  });
+  await cmuxLog({
+    workspace,
+    source: "agent-teams",
+    level: status === "completed" ? "info" : "error",
+    message: `task ${taskId} ${status}. summary: ${summaryPath}`,
+  });
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  const cap = Math.max(1, limit);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(cap, items.length) }, async () => {
+    for (;;) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      await fn(items[idx]!);
+    }
+  });
+  await Promise.all(workers);
 }
 
 function truncate(s: string, n: number): string {
