@@ -42,6 +42,7 @@ The report should include (use these Japanese section headings):
 - ## 実施内容 — bullet list of concrete changes
 - ## 変更ファイル — list of paths touched
 - ## 申し送り / ブロッカー — anything the summarizer or reviewer should know
+- ## つぶやき — a single short line (140 chars or fewer, Japanese, tweet-style) spoken in your own voice about how this task went. Stay in character — let your personality show. This becomes flavor text in the team summary, so make it punchy, not a recap. Example: 「テスト先に書いたら勝ち確。」
 ${signature ? `\n${signature}\n` : ""}${targetRepoBlock}${peerReposBlock}
 After the report is written, your final assistant message can be short ("Report written to ${reportPath}"). Do not ask clarifying questions of a human; make your best judgment call and document the assumption in the report.
 `.trim();
