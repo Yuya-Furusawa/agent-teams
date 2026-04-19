@@ -100,28 +100,31 @@ link_bin() {
 }
 link_bin "$REPO_ROOT/packages/cli/dist/index.js" "agent-teams"
 
-step "linking slash command into $CLAUDE_COMMANDS_DIR"
+step "linking slash commands into $CLAUDE_COMMANDS_DIR"
 run "mkdir -p \"$CLAUDE_COMMANDS_DIR\""
-LINK_TARGET="$CLAUDE_COMMANDS_DIR/team.md"
-SOURCE="$REPO_ROOT/commands/team.md"
-if [[ -e "$LINK_TARGET" || -L "$LINK_TARGET" ]]; then
-  if [[ $YES -eq 1 || $DRY_RUN -eq 1 ]]; then
-    run "rm -f \"$LINK_TARGET\""
-  else
-    printf "    %s already exists. overwrite? [y/N] " "$LINK_TARGET"
-    read -r ans
-    case "$ans" in
-      y|Y) run "rm -f \"$LINK_TARGET\"" ;;
-      *)   echo "    skipped"; SKIP_LINK=1 ;;
-    esac
+link_command() {
+  local source="$1" name="$2"
+  local target="$CLAUDE_COMMANDS_DIR/$name"
+  if [[ -e "$target" || -L "$target" ]]; then
+    if [[ $YES -eq 1 || $DRY_RUN -eq 1 ]]; then
+      run "rm -f \"$target\""
+    else
+      printf "    %s already exists. overwrite? [y/N] " "$target"
+      read -r ans
+      case "$ans" in
+        y|Y) run "rm -f \"$target\"" ;;
+        *)   echo "    skipped"; return 0 ;;
+      esac
+    fi
   fi
-fi
-if [[ -z "${SKIP_LINK:-}" ]]; then
-  run "ln -s \"$SOURCE\" \"$LINK_TARGET\""
-fi
+  run "ln -s \"$source\" \"$target\""
+}
+link_command "$REPO_ROOT/commands/team.md" "team.md"
+link_command "$REPO_ROOT/commands/team-ws.md" "team-ws.md"
 
-step "creating data directory"
+step "creating data directories"
 run "mkdir -p \"$AGENT_TEAMS_HOME/tasks\""
+run "mkdir -p \"$AGENT_TEAMS_HOME/workspaces\""
 
 PATH_WARNING=""
 case ":$PATH:" in
@@ -144,6 +147,7 @@ usage:
   /team "<your task>"
 
 data directory:   $AGENT_TEAMS_HOME
-slash command:    $CLAUDE_COMMANDS_DIR/team.md -> $SOURCE
+workspaces:       $AGENT_TEAMS_HOME/workspaces/
+slash commands:   $CLAUDE_COMMANDS_DIR/team.md, $CLAUDE_COMMANDS_DIR/team-ws.md
 cli linked at:    $AGENT_TEAMS_BIN_DIR/agent-teams$PATH_WARNING
 EOF
