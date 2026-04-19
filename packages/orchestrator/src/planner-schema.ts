@@ -1,5 +1,78 @@
 import { z } from "zod";
 
+export const DifficultyEnum = z.enum([
+  "trivial",
+  "small",
+  "medium",
+  "large",
+  "xlarge",
+]);
+export type Difficulty = z.infer<typeof DifficultyEnum>;
+
+export const TriageSchema = z.object({
+  difficulty: DifficultyEnum,
+  selectedAgents: z.array(z.string().min(1)).min(1),
+  rationale: z.string().optional(),
+});
+export type Triage = z.infer<typeof TriageSchema>;
+
+export const SUB_TASK_COUNT_BY_DIFFICULTY: Record<Difficulty, string> = {
+  trivial: "exactly 1 sub-task",
+  small: "1–2 sub-tasks",
+  medium: "2–3 sub-tasks",
+  large: "3–5 sub-tasks",
+  xlarge: "5–7 sub-tasks",
+};
+
+export function buildTriagePrompt(opts: {
+  task: string;
+  cwd: string;
+  roster: Array<{ name: string; role?: string; description?: string }>;
+}): string {
+  const rosterText = opts.roster
+    .map((w) => {
+      const label = w.role ? `${w.name} (role: ${w.role})` : w.name;
+      return `- ${label}${w.description ? ` — ${w.description}` : ""}`;
+    })
+    .join("\n");
+  return `
+You are operating in TRIAGE mode. Before any work is decomposed, classify how big the task is and pick the smallest set of agents that can accomplish it well.
+
+# User task
+${opts.task}
+
+# Working directory
+${opts.cwd}
+
+# Full agent roster (pick any subset)
+${rosterText}
+
+# Difficulty ladder
+- **trivial**: typo / one-line / obvious rename. A human would finish in under a minute.
+- **small**: single-file feature or clear bug fix. <15 min of focused work.
+- **medium**: multi-file change or moderate refactor. 15–60 min.
+- **large**: cross-module change or new subsystem. 1–4 hours.
+- **xlarge**: major feature needing research + design + impl + tests + docs.
+
+# Agent selection rules
+- Pick the **smallest set** that can do the job well.
+- Typical counts: trivial/small → 1–2 agents; medium → 2–4; large → 3–6; xlarge → up to 8.
+- Include an agent only if its charter clearly maps to work the task requires. Do not include "just in case" — the planner can only assign among the agents you select.
+- If the task is UI-visible, include a browser / E2E agent. If it touches infra, include the DevOps agent. If there's a failing test or broken state, include a debugger. Otherwise leave them out.
+
+# Required output
+Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code block matching this schema (no prose after it):
+
+\`\`\`json
+{
+  "difficulty": "trivial | small | medium | large | xlarge",
+  "selectedAgents": ["Name1", "Name2", ...],
+  "rationale": "one short paragraph explaining difficulty assessment and why each agent made the cut"
+}
+\`\`\`
+`.trim();
+}
+
 export const SubTaskPlanSchema = z.object({
   title: z.string().min(1).describe("Short imperative title for the sub-task"),
   prompt: z
@@ -70,6 +143,8 @@ export function buildPlannerPrompt(opts: {
   task: string;
   cwd: string;
   workerRoster: Array<{ name: string; role?: string; description?: string }>;
+  difficulty?: Difficulty;
+  triageRationale?: string;
 }): string {
   const roster = opts.workerRoster
     .map((w) => {
@@ -77,8 +152,14 @@ export function buildPlannerPrompt(opts: {
       return `- ${label}${w.description ? ` — ${w.description}` : ""}`;
     })
     .join("\n");
+  const difficultyLine = opts.difficulty
+    ? `\n\n# Difficulty (from triage)\n${opts.difficulty} — aim for ${SUB_TASK_COUNT_BY_DIFFICULTY[opts.difficulty]}.`
+    : "";
+  const triageLine = opts.triageRationale
+    ? `\n\n# Triage rationale\n${opts.triageRationale}`
+    : "";
   return `
-You are the planner for a team of coding agents. Decompose the user's task into 2–4 focused sub-tasks, then choose which worker agent is best suited for each.
+You are the planner for a team of coding agents. Decompose the user's task into focused sub-tasks and choose which worker agent is best suited for each.${difficultyLine}${triageLine}
 
 # User task
 ${opts.task}
@@ -90,7 +171,7 @@ ${opts.cwd}
 ${roster}
 
 # Required output
-Your FINAL assistant message MUST end with a single fenced JSON code block matching the schema below. No other prose after the block. Use at most 4 sub-tasks. Each sub-task's "prompt" must be self-contained (the worker will not see this planning conversation).
+Your FINAL assistant message MUST end with a single fenced JSON code block matching the schema below. No other prose after the block. Keep the sub-task count aligned with the difficulty guidance above. Each sub-task's "prompt" must be self-contained (the worker will not see this planning conversation).
 
 Schema:
 \`\`\`json
