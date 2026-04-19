@@ -5,15 +5,21 @@ export function TaskList({
   tasks,
   selectedId,
   onSelect,
+  emptyHint,
 }: {
   tasks: Task[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  emptyHint?: React.ReactNode;
 }): JSX.Element {
   if (tasks.length === 0) {
     return (
       <div className="p-4 text-xs text-neutral-500">
-        No tasks yet. Run <code className="text-neutral-300">/team &quot;...&quot;</code> in a Claude Code session to create one.
+        {emptyHint ?? (
+          <>
+            No tasks yet. Run <code className="text-neutral-300">/team &quot;...&quot;</code> in a Claude Code session to create one.
+          </>
+        )}
       </div>
     );
   }
