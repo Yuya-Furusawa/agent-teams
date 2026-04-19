@@ -1,6 +1,6 @@
 # agent-teams
 
-Local orchestrator that runs a team of Claude Code sub-agents for one user task: a **planner** sub-agent decomposes the task into sub-tasks, **worker** sub-agents execute each in its own cmux terminal pane, and the planner is re-invoked as the **summarizer** to produce a final report.
+Local orchestrator that runs a team of Claude Code sub-agents for one user task: a **planner** sub-agent decomposes the task into sub-tasks, **worker** sub-agents execute each concurrently in-process (capped by `defaults.maxParallel`), and the planner is re-invoked as the **summarizer** to produce a final report.
 
 Invoked from a Claude Code session via slash command `/team "<task>"` → `agent-teams run "..."` CLI.
 
@@ -8,7 +8,7 @@ Invoked from a Claude Code session via slash command `/team "<task>"` → `agent
 
 - Node 20+, pnpm 10+
 - `claude` CLI on PATH with agents registered (`claude agents list`)
-- `cmux` CLI on PATH; the orchestrator drives the currently-running cmux workspace
+- `cmux` CLI is **optional** — if present, the orchestrator emits status / log events into the active cmux workspace. If absent, those calls are skipped silently. Workers no longer run inside cmux terminal panes; they run as in-process `claude -p` child processes spawned by the orchestrator.
 
 ## Layout (pnpm monorepo)
 
@@ -17,11 +17,11 @@ agents/           # bundled sub-agent definitions (.md, YAML frontmatter + syste
                   #   auto-injected into every `claude -p` run via --agents <json>
                   #   override location with $AGENT_TEAMS_AGENTS_DIR
 packages/
-  cmux-adapter/   # cmux CLI wrapper (currentWorkspace, newTerminalPane, send, …)
+  cmux-adapter/   # cmux CLI wrapper (currentWorkspace, setStatus, log, …) — status/log only
   storage/        # SQLite (tasks/sub_tasks/agent_runs) + files (events.jsonl, report.md)
   agent-runner/   # spawns `claude -p --output-format stream-json`, parses events
   orchestrator/   # team loader, agent-registry loader, planner runner, worker dispatch, summarizer
-  cli/            # `agent-teams` + `agent-teams-internal worker` bins
+  cli/            # `agent-teams` bin
 commands/team.md  # slash command template (symlinked to ~/.claude/commands/ by setup.sh)
 setup.sh          # scaffold + symlink installer; supports --dry-run / --yes
 agent-team.yaml   # sample team config (planner + worker roster)
@@ -48,19 +48,13 @@ After editing source: `pnpm -r build` is enough. The `~/.local/bin/agent-teams*`
 3. **Triage**: `Sage` runs with the full roster; classifies difficulty (trivial / small / medium / large / xlarge) and selects the smallest sufficient subset of agents. Events → `triage-events.jsonl`
 4. **Plan**: `Sage` runs again with the restricted roster + difficulty hint; outputs sub-tasks whose count matches the difficulty (trivial=1, small=1–2, medium=2–3, large=3–5, xlarge=5–7). Events → `planner-events.jsonl`
 5. `agent-runner` parses the closing JSON for each of (3) and (4) — either from a `result` event or a fenced-block fallback on `lastText`
-6. For each sub-task, orchestrator creates a fresh terminal pane with `cmux new-pane --type terminal` and sends `agent-teams-internal worker <task> <sub>` to its selected surface
+6. For each sub-task, orchestrator invokes `runWorker` directly in-process (parallelism capped by `team.defaults.maxParallel`, default 3). Each worker is a `claude -p` child process spawned by `agent-runner`. No cmux panes are created.
 7. Each worker writes raw stream-json events to `agents/<id>/events.jsonl` and writes `report.md` as its final step (appended-system-prompt contract). Fallback: if no file is written, the worker's last assistant text is saved as the report
-8. Orchestrator polls SQLite (`sub_tasks.status`) until all workers finish, then re-runs Sage in **summarizer mode** → `summary.md`
+8. Once all in-process worker promises resolve, the orchestrator re-runs Sage in **summarizer mode** → `summary.md`
 
-## cmux model (important!)
+## cmux model (status/log only)
 
-cmux distinguishes **panes** (visual rectangles) from **surfaces** (the actual terminal/browser inside a pane). Each pane can host multiple surfaces.
-
-- `send`, `send-key`, `rename-tab` take `--surface <surface-ref>` — **not** pane refs
-- Use `new-pane --type terminal --direction <dir>` (**not** `new-split`) to guarantee a terminal surface
-- After `new-pane`, resolve the selected surface via `list-pane-surfaces --pane <ref>`
-
-Passing a pane ref to `--surface` produces `invalid_params: Surface is not a terminal`. The adapter (`cmux-adapter`) encapsulates this — callers work with `SurfaceRef` only.
+The orchestrator uses cmux only for observability of the containing workspace: `setStatus`, `clearStatus`, and `log`. All calls are guarded by a nullable `workspace` handle (`currentWorkspace().catch(() => null)`), so running without cmux just silently skips these calls.
 
 ## Planner/summarizer JSON contract
 
@@ -82,7 +76,7 @@ Built-in Claude agents (`general-purpose`, `Explore`, `Plan`, `statusline-setup`
 
 ## Agent model
 
-Each agent is an **independent** markdown file at `agents/<Name>.md`. The filename must match the frontmatter `name`. The `name` is the routing key used everywhere (team.yaml, planner output, `--agents` JSON key, cmux pane tab, report signature).
+Each agent is an **independent** markdown file at `agents/<Name>.md`. The filename must match the frontmatter `name`. The `name` is the routing key used everywhere (team.yaml, planner output, `--agents` JSON key, report signature).
 
 Frontmatter fields (all optional except `name` and the body):
 - `name` — identifier (= filename, = display, = routing key). Unique across all files.
@@ -108,7 +102,7 @@ The planner, summarizer, and every worker receive the **same** inline agents map
 
 ### Where each field surfaces
 
-- `name` → cmux pane tab title, planner roster entries, `sub_tasks.assigned_agent` column, report signature
+- `name` → planner roster entries, `sub_tasks.assigned_agent` column, report signature
 - `role` → planner roster text ("`Kai (role: implementer)`"), summarizer report sections, orchestrator's `roleOf()` lookup
 - `personality` → only inside the injected system prompt (not user-visible metadata)
 
@@ -135,7 +129,7 @@ Earlier designs shared a role body across personas and overrode just persona + p
         └── report.md           # worker final report
 ```
 
-Multiple processes (orchestrator + N workers) write to the same SQLite file; WAL mode handles concurrency. Per-task filesystem paths are namespaced by ULID so workers never collide.
+All workers run in-process (same Node process as the orchestrator), each spawning its own `claude -p` child. WAL mode on SQLite is still enabled so GUI readers and any external tools can safely observe the DB while a run is active. Per-task filesystem paths are namespaced by ULID so workers never collide.
 
 ## Environment variables
 
