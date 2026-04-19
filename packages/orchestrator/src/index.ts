@@ -11,5 +11,14 @@ export {
   buildInstanceInlineAgents,
   resolvePlannerInstance,
   resolveTeam,
+  resolveWorkspaceTeam,
   type AgentInstance,
 } from "./instance.js";
+export {
+  loadWorkspace,
+  listWorkspaces,
+  workspaceRepoByName,
+  WorkspaceSchema,
+  type Repo,
+  type Workspace,
+} from "./workspace.js";

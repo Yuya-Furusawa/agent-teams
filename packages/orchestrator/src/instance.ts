@@ -1,6 +1,10 @@
 import type { AgentDefinition, AgentRegistry } from "./agent-registry.js";
 import type { Team } from "./team.js";
 
+const DEFAULT_WORKSPACE_PLANNER = "Sage";
+const DEFAULT_WORKSPACE_MODEL = "claude-opus-4-7";
+const DEFAULT_WORKSPACE_MAX_PARALLEL = 3;
+
 export interface AgentInstance {
   name: string;
   role?: string;
@@ -74,6 +78,40 @@ export function buildInstanceInlineAgents(
     };
   }
   return map;
+}
+
+export function resolveWorkspaceTeam(
+  workspaceName: string,
+  registry: AgentRegistry,
+): Team {
+  const plannerName = registry[DEFAULT_WORKSPACE_PLANNER]
+    ? DEFAULT_WORKSPACE_PLANNER
+    : findFirstPlannerRole(registry) ?? DEFAULT_WORKSPACE_PLANNER;
+  const workers = Object.values(registry)
+    .filter((def) => def.name !== plannerName)
+    .map((def) => def.name)
+    .sort();
+  if (workers.length === 0) {
+    throw new Error(
+      `workspace "${workspaceName}" has no worker agents available (registry is empty after excluding planner "${plannerName}")`,
+    );
+  }
+  return {
+    name: `workspace:${workspaceName}`,
+    planner: plannerName,
+    workers,
+    defaults: {
+      model: DEFAULT_WORKSPACE_MODEL,
+      maxParallel: DEFAULT_WORKSPACE_MAX_PARALLEL,
+    },
+  };
+}
+
+function findFirstPlannerRole(registry: AgentRegistry): string | undefined {
+  for (const def of Object.values(registry)) {
+    if (def.role === "planner") return def.name;
+  }
+  return undefined;
 }
 
 function buildInstancePrompt(inst: AgentInstance): string {
