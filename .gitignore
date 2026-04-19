@@ -6,3 +6,9 @@ dist/
 .env.local
 *.log
 .claude/settings.local.json
+.superpowers/
+
+# Rust / Tauri build artefacts
+target/
+packages/gui/src-tauri/gen/
+dist-gui/
