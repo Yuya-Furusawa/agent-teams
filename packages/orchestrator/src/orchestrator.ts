@@ -30,7 +30,7 @@ import {
   resolveTeam,
   type AgentInstance,
 } from "./instance.js";
-import { runPlanner, runSummarizer } from "./planner-runner.js";
+import { runPlanner, runSummarizer, runTriage } from "./planner-runner.js";
 import type { SubTaskPlan } from "./planner-schema.js";
 import { loadTeam, validateTeamAgainstRegistry } from "./team.js";
 
@@ -81,8 +81,39 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
 
   try {
     if (workspace) {
-      await setStatus({ workspace, key: "agent-teams", value: "planning…", icon: "circle.dotted" });
-      await cmuxLog({ workspace, source: "agent-teams", message: `task ${taskId} planning: ${truncate(opts.description, 120)}` });
+      await setStatus({ workspace, key: "agent-teams", value: "triaging…", icon: "questionmark.circle" });
+      await cmuxLog({ workspace, source: "agent-teams", message: `task ${taskId}: ${truncate(opts.description, 120)}` });
+    }
+
+    const fullRoster = workerInstances.map((i) => ({
+      name: i.name,
+      role: i.role,
+      description: i.description,
+    }));
+
+    const triage = await runTriage({
+      task: opts.description,
+      cwd,
+      team,
+      plannerAgentName: plannerInstance.name,
+      roster: fullRoster,
+      eventsPath: join(taskDir(taskId), "triage-events.jsonl"),
+      inlineAgents,
+    });
+
+    const selectedSet = new Set(triage.selectedAgents);
+    const selectedInstances = workerInstances.filter((i) => selectedSet.has(i.name));
+    if (selectedInstances.length === 0) {
+      throw new Error(`triage selected no agents (roster: ${workerInstances.map((i) => i.name).join(", ")})`);
+    }
+
+    if (workspace) {
+      await cmuxLog({
+        workspace,
+        source: "agent-teams",
+        message: `triage: ${triage.difficulty} — picked ${triage.selectedAgents.join(", ")}`,
+      });
+      await setStatus({ workspace, key: "agent-teams", value: `planning (${triage.difficulty})…`, icon: "circle.dotted" });
     }
 
     const plan = await runPlanner({
@@ -90,11 +121,13 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       cwd,
       team,
       plannerAgentName: plannerInstance.name,
-      workers: workerInstances.map((i) => ({
+      workers: selectedInstances.map((i) => ({
         name: i.name,
         role: i.role,
         description: i.description,
       })),
+      difficulty: triage.difficulty,
+      triageRationale: triage.rationale,
       eventsPath: join(taskDir(taskId), "planner-events.jsonl"),
       inlineAgents,
     });
