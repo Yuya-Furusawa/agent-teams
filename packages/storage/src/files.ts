@@ -15,11 +15,14 @@ export interface TaskSnapshot {
   cwd: string;
   team: string;
   status: string;
+  workspace?: string | null;
+  repos?: Array<{ name: string; path: string; role?: string }> | null;
   subTasks: Array<{
     id: string;
     title: string;
     assignedAgent: string;
     status: string;
+    targetRepo?: string | null;
   }>;
   createdAt: number;
   completedAt: number | null;

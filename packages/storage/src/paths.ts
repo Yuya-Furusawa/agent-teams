@@ -36,3 +36,14 @@ export function eventsFile(taskId: string, subTaskId: string): string {
 export function settingsFile(taskId: string, subTaskId: string): string {
   return join(agentDir(taskId, subTaskId), "settings.json");
 }
+
+export function workspacesDir(): string {
+  return (
+    process.env["AGENT_TEAMS_WORKSPACES_DIR"] ??
+    join(getHome(), "workspaces")
+  );
+}
+
+export function workspaceFile(name: string): string {
+  return join(workspacesDir(), `${name}.yaml`);
+}

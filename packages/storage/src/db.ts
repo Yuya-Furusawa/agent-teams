@@ -14,6 +14,8 @@ export interface TaskRow {
   status: TaskStatus;
   created_at: number;
   completed_at: number | null;
+  workspace_name: string | null;
+  repos: string | null;
 }
 
 export interface SubTaskRow {
@@ -25,6 +27,7 @@ export interface SubTaskRow {
   status: SubTaskStatus;
   created_at: number;
   completed_at: number | null;
+  target_repo: string | null;
 }
 
 export interface AgentRunRow {
@@ -48,7 +51,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   team_name TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  completed_at INTEGER
+  completed_at INTEGER,
+  workspace_name TEXT,
+  repos TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sub_tasks (
@@ -59,7 +64,8 @@ CREATE TABLE IF NOT EXISTS sub_tasks (
   assigned_agent TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  completed_at INTEGER
+  completed_at INTEGER,
+  target_repo TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sub_tasks_task_id ON sub_tasks(task_id);
@@ -84,19 +90,47 @@ export class Storage {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  private migrate(): void {
+    const taskCols = this.db.pragma("table_info(tasks)") as Array<{ name: string }>;
+    const taskColNames = new Set(taskCols.map((c) => c.name));
+    if (!taskColNames.has("workspace_name")) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN workspace_name TEXT`);
+    }
+    if (!taskColNames.has("repos")) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN repos TEXT`);
+    }
+    const subCols = this.db.pragma("table_info(sub_tasks)") as Array<{ name: string }>;
+    const subColNames = new Set(subCols.map((c) => c.name));
+    if (!subColNames.has("target_repo")) {
+      this.db.exec(`ALTER TABLE sub_tasks ADD COLUMN target_repo TEXT`);
+    }
   }
 
   close(): void {
     this.db.close();
   }
 
-  insertTask(row: Omit<TaskRow, "completed_at"> & { completed_at?: number | null }): void {
+  insertTask(
+    row: Omit<TaskRow, "completed_at" | "workspace_name" | "repos"> & {
+      completed_at?: number | null;
+      workspace_name?: string | null;
+      repos?: string | null;
+    },
+  ): void {
     this.db
       .prepare(
-        `INSERT INTO tasks (id, description, cwd, team_name, status, created_at, completed_at)
-         VALUES (@id, @description, @cwd, @team_name, @status, @created_at, @completed_at)`,
+        `INSERT INTO tasks (id, description, cwd, team_name, status, created_at, completed_at, workspace_name, repos)
+         VALUES (@id, @description, @cwd, @team_name, @status, @created_at, @completed_at, @workspace_name, @repos)`,
       )
-      .run({ completed_at: null, ...row });
+      .run({
+        completed_at: null,
+        workspace_name: null,
+        repos: null,
+        ...row,
+      });
   }
 
   updateTaskStatus(id: string, status: TaskStatus, completedAt?: number | null): void {
@@ -107,13 +141,18 @@ export class Storage {
       .run(status, completedAt ?? null, id);
   }
 
-  insertSubTask(row: Omit<SubTaskRow, "completed_at"> & { completed_at?: number | null }): void {
+  insertSubTask(
+    row: Omit<SubTaskRow, "completed_at" | "target_repo"> & {
+      completed_at?: number | null;
+      target_repo?: string | null;
+    },
+  ): void {
     this.db
       .prepare(
-        `INSERT INTO sub_tasks (id, task_id, title, prompt, assigned_agent, status, created_at, completed_at)
-         VALUES (@id, @task_id, @title, @prompt, @assigned_agent, @status, @created_at, @completed_at)`,
+        `INSERT INTO sub_tasks (id, task_id, title, prompt, assigned_agent, status, created_at, completed_at, target_repo)
+         VALUES (@id, @task_id, @title, @prompt, @assigned_agent, @status, @created_at, @completed_at, @target_repo)`,
       )
-      .run({ completed_at: null, ...row });
+      .run({ completed_at: null, target_repo: null, ...row });
   }
 
   updateSubTaskStatus(id: string, status: SubTaskStatus, completedAt?: number | null): void {
