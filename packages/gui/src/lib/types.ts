@@ -12,6 +12,7 @@ export interface Task {
   subTaskCount: number;
   completedSubTaskCount: number;
   failedSubTaskCount: number;
+  workspace: string | null;
 }
 
 export interface SubTask {
@@ -22,6 +23,7 @@ export interface SubTask {
   status: SubTaskStatus;
   createdAt: number;
   completedAt: number | null;
+  targetRepo: string | null;
 }
 
 export interface TaskDetail {

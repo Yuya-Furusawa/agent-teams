@@ -43,7 +43,14 @@ export function AgentSidebar({
               active ? "bg-neutral-800" : "hover:bg-neutral-900/80"
             }`}
           >
-            <div className="text-sm truncate">{s.assignedAgent}</div>
+            <div className="text-sm truncate flex items-baseline gap-1.5">
+              <span className="font-medium">{s.assignedAgent}</span>
+              {s.targetRepo && (
+                <span className="text-[10px] px-1 py-0.5 rounded bg-neutral-700 text-neutral-200">
+                  {s.targetRepo}
+                </span>
+              )}
+            </div>
             <div className="text-xs text-neutral-500 truncate">{s.title}</div>
             <div className="mt-0.5"><StatusBadge status={s.status} /></div>
           </button>

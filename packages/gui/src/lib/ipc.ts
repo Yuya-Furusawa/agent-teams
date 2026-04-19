@@ -22,6 +22,10 @@ export async function getReport(
   return invoke<string | null>("get_report", { taskId, kind });
 }
 
+export async function listWorkspaces(): Promise<string[]> {
+  return invoke<string[]>("list_workspaces");
+}
+
 export async function onTasksChanged(
   handler: (payload: TasksChangedPayload) => void,
 ): Promise<UnlistenFn> {

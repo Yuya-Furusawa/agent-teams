@@ -13,6 +13,7 @@ const baseTask: Task = {
   subTaskCount: 1,
   completedSubTaskCount: 1,
   failedSubTaskCount: 0,
+  workspace: null,
 };
 
 describe("TaskList", () => {
@@ -33,5 +34,11 @@ describe("TaskList", () => {
       <TaskList tasks={[baseTask]} selectedId="t1" onSelect={() => {}} />,
     );
     expect(container.querySelector(".bg-neutral-800")).not.toBeNull();
+  });
+
+  it("renders workspace badge when task belongs to a workspace", () => {
+    const t: Task = { ...baseTask, workspace: "my-app" };
+    render(<TaskList tasks={[t]} selectedId={null} onSelect={() => {}} />);
+    expect(screen.getByText("my-app")).toBeTruthy();
   });
 });

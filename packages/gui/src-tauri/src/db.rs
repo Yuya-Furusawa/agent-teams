@@ -39,7 +39,8 @@ impl Db {
               t.id, t.description, t.team_name, t.status, t.created_at, t.completed_at,
               COALESCE(COUNT(s.id), 0)                                                 AS sub_count,
               COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0)     AS done_count,
-              COALESCE(SUM(CASE WHEN s.status = 'failed'    THEN 1 ELSE 0 END), 0)     AS failed_count
+              COALESCE(SUM(CASE WHEN s.status = 'failed'    THEN 1 ELSE 0 END), 0)     AS failed_count,
+              t.workspace_name
             FROM tasks t
             LEFT JOIN sub_tasks s ON s.task_id = t.id
             GROUP BY t.id
@@ -59,6 +60,7 @@ impl Db {
                     sub_task_count: r.get::<_, i64>(6)? as u32,
                     completed_sub_task_count: r.get::<_, i64>(7)? as u32,
                     failed_sub_task_count: r.get::<_, i64>(8)? as u32,
+                    workspace: r.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -74,7 +76,8 @@ impl Db {
                   t.id, t.description, t.team_name, t.status, t.created_at, t.completed_at,
                   COALESCE(COUNT(s.id), 0),
                   COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0),
-                  COALESCE(SUM(CASE WHEN s.status = 'failed'    THEN 1 ELSE 0 END), 0)
+                  COALESCE(SUM(CASE WHEN s.status = 'failed'    THEN 1 ELSE 0 END), 0),
+                  t.workspace_name
                 FROM tasks t
                 LEFT JOIN sub_tasks s ON s.task_id = t.id
                 WHERE t.id = ?1
@@ -92,6 +95,7 @@ impl Db {
                         sub_task_count: r.get::<_, i64>(6)? as u32,
                         completed_sub_task_count: r.get::<_, i64>(7)? as u32,
                         failed_sub_task_count: r.get::<_, i64>(8)? as u32,
+                        workspace: r.get(9)?,
                     })
                 },
             )
@@ -99,7 +103,7 @@ impl Db {
         let Some(task) = task else { return Ok(None); };
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, task_id, title, assigned_agent, status, created_at, completed_at
+            SELECT id, task_id, title, assigned_agent, status, created_at, completed_at, target_repo
             FROM sub_tasks
             WHERE task_id = ?1
             ORDER BY created_at ASC
@@ -115,6 +119,7 @@ impl Db {
                     status: r.get(4)?,
                     created_at: r.get(5)?,
                     completed_at: r.get(6)?,
+                    target_repo: r.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -135,15 +140,16 @@ mod tests {
         c.execute_batch(
             r#"
             CREATE TABLE tasks (id TEXT PRIMARY KEY, description TEXT NOT NULL, cwd TEXT NOT NULL,
-              team_name TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, completed_at INTEGER);
+              team_name TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, completed_at INTEGER,
+              workspace_name TEXT, repos TEXT);
             CREATE TABLE sub_tasks (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, title TEXT NOT NULL,
               prompt TEXT NOT NULL, assigned_agent TEXT NOT NULL, status TEXT NOT NULL,
-              created_at INTEGER NOT NULL, completed_at INTEGER);
-            INSERT INTO tasks VALUES ('t1', 'desc one', '/w', 'default', 'completed', 1000, 2000);
-            INSERT INTO tasks VALUES ('t2', 'desc two', '/w', 'default', 'running',   3000, NULL);
-            INSERT INTO sub_tasks VALUES ('s1a', 't1', 'one', '', 'Lin', 'completed', 1000, 1500);
-            INSERT INTO sub_tasks VALUES ('s1b', 't1', 'two', '', 'Kai', 'failed',    1100, 1600);
-            INSERT INTO sub_tasks VALUES ('s2a', 't2', 'a',   '', 'Kai', 'running',   3100, NULL);
+              created_at INTEGER NOT NULL, completed_at INTEGER, target_repo TEXT);
+            INSERT INTO tasks VALUES ('t1', 'desc one', '/w', 'default', 'completed', 1000, 2000, NULL, NULL);
+            INSERT INTO tasks VALUES ('t2', 'desc two', '/w', 'default', 'running',   3000, NULL, 'my-app', '[]');
+            INSERT INTO sub_tasks VALUES ('s1a', 't1', 'one', '', 'Lin', 'completed', 1000, 1500, NULL);
+            INSERT INTO sub_tasks VALUES ('s1b', 't1', 'two', '', 'Kai', 'failed',    1100, 1600, NULL);
+            INSERT INTO sub_tasks VALUES ('s2a', 't2', 'a',   '', 'Kai', 'running',   3100, NULL, 'backend');
             "#,
         )
         .unwrap();

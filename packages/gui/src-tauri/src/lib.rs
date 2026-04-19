@@ -23,6 +23,13 @@ fn agent_teams_home() -> PathBuf {
         .join(".agent-teams")
 }
 
+fn workspaces_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("AGENT_TEAMS_WORKSPACES_DIR") {
+        return PathBuf::from(v);
+    }
+    agent_teams_home().join("workspaces")
+}
+
 fn db_path(home: &std::path::Path) -> PathBuf {
     std::env::var("AGENT_TEAMS_DB")
         .map(PathBuf::from)
@@ -47,6 +54,29 @@ async fn get_task_detail(
     task_id: String,
 ) -> Result<Option<TaskDetail>, String> {
     state.db.get_task_detail(&task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_workspaces() -> Result<Vec<String>, String> {
+    let dir = workspaces_dir();
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+                return None;
+            }
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+    names.sort();
+    Ok(names)
 }
 
 #[tauri::command]
@@ -79,7 +109,12 @@ pub fn run() {
                 Ok(())
             }
         })
-        .invoke_handler(tauri::generate_handler![list_tasks, get_task_detail, get_report])
+        .invoke_handler(tauri::generate_handler![
+            list_tasks,
+            get_task_detail,
+            get_report,
+            list_workspaces
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

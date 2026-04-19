@@ -12,6 +12,7 @@ pub struct Task {
     pub sub_task_count: u32,
     pub completed_sub_task_count: u32,
     pub failed_sub_task_count: u32,
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub struct SubTask {
     pub status: String,
     pub created_at: i64,
     pub completed_at: Option<i64>,
+    pub target_repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -64,6 +66,7 @@ mod tests {
             status: status.into(),
             created_at: 0,
             completed_at: None,
+            target_repo: None,
         }
     }
 

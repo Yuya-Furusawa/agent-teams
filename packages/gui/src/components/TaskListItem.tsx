@@ -23,7 +23,14 @@ export function TaskListItem({
         selected ? "bg-neutral-800" : "hover:bg-neutral-900"
       }`}
     >
-      <div className="text-sm text-neutral-100 truncate">{task.description}</div>
+      <div className="text-sm text-neutral-100 truncate">
+        {task.workspace && (
+          <span className="text-[10px] px-1 py-0.5 mr-1.5 rounded bg-neutral-700 text-neutral-200 align-middle">
+            {task.workspace}
+          </span>
+        )}
+        {task.description}
+      </div>
       <div className="flex items-center gap-2 text-xs mt-1">
         <StatusBadge status={task.status} />
         {progress && <span className="text-neutral-500">{progress}</span>}
