@@ -11,15 +11,18 @@
 #   ./setup.sh              # interactive (prompts before overwriting existing files)
 #   ./setup.sh --yes        # non-interactive, overwrite existing symlinks
 #   ./setup.sh --dry-run    # print actions without performing them
+#   ./setup.sh --with-gui   # also build the Tauri desktop GUI into dist-gui/
 #
 set -euo pipefail
 
 DRY_RUN=0
 YES=0
+WITH_GUI=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --yes|-y)  YES=1 ;;
+    --with-gui) WITH_GUI=1 ;;
     -h|--help)
       sed -n '2,20p' "$0"
       exit 0
@@ -60,6 +63,17 @@ run "cd \"$REPO_ROOT\" && pnpm install"
 
 step "building packages"
 run "cd \"$REPO_ROOT\" && pnpm -r build"
+
+if [[ $WITH_GUI -eq 1 ]]; then
+  step "building Tauri GUI"
+  run "cd \"$REPO_ROOT\" && pnpm --filter @agent-teams/gui tauri build"
+  if [[ -d "$REPO_ROOT/packages/gui/src-tauri/target/release/bundle" ]]; then
+    run "mkdir -p \"$REPO_ROOT/dist-gui\""
+    run "cp -R \"$REPO_ROOT/packages/gui/src-tauri/target/release/bundle\"/* \"$REPO_ROOT/dist-gui\"/"
+  else
+    echo "warning: tauri bundle directory missing — skipping copy" >&2
+  fi
+fi
 
 step "marking CLI binaries executable"
 run "chmod +x \"$REPO_ROOT/packages/cli/dist/index.js\" \"$REPO_ROOT/packages/cli/dist/internal-worker.js\""

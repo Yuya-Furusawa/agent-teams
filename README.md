@@ -36,6 +36,14 @@ Make sure `~/.local/bin` is on your `PATH` — if it isn't, `setup.sh` prints th
 
 Pass `--yes` to skip overwrite prompts and `--dry-run` to preview actions.
 
+### Optional: build the desktop GUI
+
+```bash
+./setup.sh --with-gui
+```
+
+Builds the Tauri report viewer in `packages/gui/` and drops the `.app` / `.dmg` bundle under `dist-gui/`. See [`docs/superpowers/specs/2026-04-19-tauri-gui-report-viewer-design.md`](docs/superpowers/specs/2026-04-19-tauri-gui-report-viewer-design.md) for scope.
+
 ## Usage
 
 1. Drop an `agent-team.yaml` in the repo you want to drive (copy from the root of this repo).
