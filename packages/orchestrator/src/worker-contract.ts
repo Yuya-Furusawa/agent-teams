@@ -11,11 +11,13 @@ You are running as one worker in a coordinated team of coding agents. When you a
 
 REPORT_PATH: ${reportPath}
 
-The report should include:
-- A one-line headline describing the outcome
-- "What was done" (bullet list of concrete changes)
-- "Files touched" (paths)
-- "Follow-ups / blockers" (anything the summarizer or reviewer should know)
+**Write the report body in Japanese (日本語)**. Keep file paths, code identifiers, and command names verbatim in English — only the surrounding prose and section headings should be Japanese.
+
+The report should include (use these Japanese section headings):
+- 1行の見出し (outcome summary)
+- ## 実施内容 — bullet list of concrete changes
+- ## 変更ファイル — list of paths touched
+- ## 申し送り / ブロッカー — anything the summarizer or reviewer should know
 ${signature ? `\n${signature}\n` : ""}
 After the report is written, your final assistant message can be short ("Report written to ${reportPath}"). Do not ask clarifying questions of a human; make your best judgment call and document the assumption in the report.
 `.trim();

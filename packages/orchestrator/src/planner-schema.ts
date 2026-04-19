@@ -219,6 +219,8 @@ ${r.report || "(no report captured)"}
   return `
 You are the summarizer for a coding-agent team. Produce a concise, faithful markdown summary of the team run based on each agent's report.
 
+**Write the "summary" value in Japanese (日本語)**. Keep file paths, agent names, code identifiers, and command names verbatim in English — only surrounding prose and section headings should be Japanese. Use these Japanese section headings in the markdown body: \`## 概要\`, \`## 実施内容\`, \`## 申し送り / リスク\`.
+
 # Original user task
 ${opts.task}
 
@@ -229,12 +231,12 @@ ${opts.cwd}
 ${sections}
 
 # Required output
-Your FINAL assistant message MUST end with a single fenced JSON code block matching the schema below.
+Your FINAL assistant message MUST end with a single fenced JSON code block matching the schema below. The JSON keys ("summary", "status") and the status enum values stay in English; only the markdown text inside the "summary" string is Japanese.
 
 Schema:
 \`\`\`json
 {
-  "summary": "string (full markdown: headline, 'What was done' section, 'Follow-ups / risks' section)",
+  "summary": "string (日本語の markdown: 見出し + ## 概要 + ## 実施内容 + ## 申し送り / リスク)",
   "status": "success | partial | failure"
 }
 \`\`\`
