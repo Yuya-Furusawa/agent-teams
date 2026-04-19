@@ -28,6 +28,7 @@ export function buildTriagePrompt(opts: {
   task: string;
   cwd: string;
   roster: Array<{ name: string; role?: string; description?: string }>;
+  repos?: RepoInfo[];
 }): string {
   const rosterText = opts.roster
     .map((w) => {
@@ -35,6 +36,7 @@ export function buildTriagePrompt(opts: {
       return `- ${label}${w.description ? ` — ${w.description}` : ""}`;
     })
     .join("\n");
+  const reposBlock = reposSection(opts.repos);
   return `
 You are operating in TRIAGE mode. Before any work is decomposed, classify how big the task is and pick the smallest set of agents that can accomplish it well.
 
@@ -42,7 +44,7 @@ You are operating in TRIAGE mode. Before any work is decomposed, classify how bi
 ${opts.task}
 
 # Working directory
-${opts.cwd}
+${opts.cwd}${reposBlock}
 
 # Full agent roster (pick any subset)
 ${rosterText}
@@ -87,6 +89,12 @@ export const SubTaskPlanSchema = z.object({
     .string()
     .optional()
     .describe("One-sentence justification for the agent selection and the sub-task scope"),
+  targetRepo: z
+    .string()
+    .optional()
+    .describe(
+      "Name of the primary repo this sub-task operates in. Required in workspace mode (must match one of the repo names provided); omitted in single-repo mode.",
+    ),
 });
 
 export const TaskPlanSchema = z.object({
@@ -133,11 +141,26 @@ export const PLAN_JSON_SCHEMA = {
           prompt: { type: "string" },
           assignedAgent: { type: "string" },
           rationale: { type: "string" },
+          targetRepo: { type: "string" },
         },
       },
     },
   },
 } as const;
+
+export interface RepoInfo {
+  name: string;
+  path: string;
+  role?: string;
+}
+
+function reposSection(repos: RepoInfo[] | undefined): string {
+  if (!repos || repos.length === 0) return "";
+  const list = repos
+    .map((r) => `- ${r.name}: ${r.path}${r.role ? ` — ${r.role}` : ""}`)
+    .join("\n");
+  return `\n\n# Repos (workspace mode)\n${list}`;
+}
 
 export function buildPlannerPrompt(opts: {
   task: string;
@@ -145,6 +168,7 @@ export function buildPlannerPrompt(opts: {
   workerRoster: Array<{ name: string; role?: string; description?: string }>;
   difficulty?: Difficulty;
   triageRationale?: string;
+  repos?: RepoInfo[];
 }): string {
   const roster = opts.workerRoster
     .map((w) => {
@@ -158,6 +182,13 @@ export function buildPlannerPrompt(opts: {
   const triageLine = opts.triageRationale
     ? `\n\n# Triage rationale\n${opts.triageRationale}`
     : "";
+  const reposBlock = reposSection(opts.repos);
+  const targetRepoInstruction = opts.repos && opts.repos.length > 0
+    ? `\n\n# Multi-repo routing\nThis run spans multiple repos. For each sub-task you MUST set "targetRepo" to exactly one of the repo names listed above. The worker will be spawned with that repo as its working directory and will have read-only awareness of the peer repos.`
+    : "";
+  const schemaTargetRepoField = opts.repos && opts.repos.length > 0
+    ? `,\n      "targetRepo": "string (exactly one repo name from the Repos list — REQUIRED in workspace mode)"`
+    : "";
   return `
 You are the planner for a team of coding agents. Decompose the user's task into focused sub-tasks and choose which worker agent is best suited for each.${difficultyLine}${triageLine}
 
@@ -165,7 +196,7 @@ You are the planner for a team of coding agents. Decompose the user's task into 
 ${opts.task}
 
 # Working directory
-${opts.cwd}
+${opts.cwd}${reposBlock}${targetRepoInstruction}
 
 # Available worker agents (pick each "assignedAgent" from this exact list)
 ${roster}
@@ -182,7 +213,7 @@ Schema:
       "title": "string (short imperative)",
       "prompt": "string (detailed instructions for the worker)",
       "assignedAgent": "string (must be exactly one of the roster names above)",
-      "rationale": "string (optional; one sentence)"
+      "rationale": "string (optional; one sentence)"${schemaTargetRepoField}
     }
   ]
 }
@@ -201,13 +232,15 @@ export function buildSummaryPrompt(opts: {
     role?: string;
     status: string;
     report: string;
+    targetRepo?: string | null;
   }>;
+  repos?: RepoInfo[];
 }): string {
   const sections = opts.subTaskReports
     .map(
       (r, i) => `
 ## Sub-task ${i + 1}: ${r.title}
-- Agent: ${r.role ? `${r.agent} (role: ${r.role})` : r.agent}
+- Agent: ${r.role ? `${r.agent} (role: ${r.role})` : r.agent}${r.targetRepo ? `\n- Repo: ${r.targetRepo}` : ""}
 - Status: ${r.status}
 
 ### Report
@@ -215,6 +248,7 @@ ${r.report || "(no report captured)"}
 `.trim(),
     )
     .join("\n\n");
+  const reposBlock = reposSection(opts.repos);
 
   return `
 You are the summarizer for a coding-agent team. Produce a concise, faithful markdown summary of the team run based on each agent's report.
@@ -225,7 +259,7 @@ You are the summarizer for a coding-agent team. Produce a concise, faithful mark
 ${opts.task}
 
 # Working directory
-${opts.cwd}
+${opts.cwd}${reposBlock}
 
 # Per-agent reports
 ${sections}

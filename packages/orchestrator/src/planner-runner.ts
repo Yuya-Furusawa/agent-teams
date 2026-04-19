@@ -8,6 +8,7 @@ import {
   buildSummaryPrompt,
   buildTriagePrompt,
   type Difficulty,
+  type RepoInfo,
   type TaskPlan,
   type Triage,
 } from "./planner-schema.js";
@@ -33,11 +34,13 @@ export async function runTriage(opts: {
   eventsPath?: string;
   inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
+  repos?: RepoInfo[];
 }): Promise<Triage> {
   const prompt = buildTriagePrompt({
     task: opts.task,
     cwd: opts.cwd,
     roster: opts.roster,
+    ...(opts.repos ? { repos: opts.repos } : {}),
   });
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
@@ -87,13 +90,15 @@ export async function runPlanner(opts: {
   eventsPath?: string;
   inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
+  repos?: RepoInfo[];
 }): Promise<TaskPlan> {
   const prompt = buildPlannerPrompt({
     task: opts.task,
     cwd: opts.cwd,
     workerRoster: opts.workers,
-    difficulty: opts.difficulty,
-    triageRationale: opts.triageRationale,
+    ...(opts.difficulty ? { difficulty: opts.difficulty } : {}),
+    ...(opts.triageRationale ? { triageRationale: opts.triageRationale } : {}),
+    ...(opts.repos ? { repos: opts.repos } : {}),
   });
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
@@ -131,6 +136,22 @@ export async function runPlanner(opts: {
       );
     }
   }
+
+  if (opts.repos && opts.repos.length > 0) {
+    const repoNames = new Set(opts.repos.map((r) => r.name));
+    for (const sub of parsed.subTasks) {
+      if (!sub.targetRepo) {
+        throw new Error(
+          `workspace mode: planner omitted targetRepo for sub-task "${sub.title}". Expected one of: ${[...repoNames].join(", ")}`,
+        );
+      }
+      if (!repoNames.has(sub.targetRepo)) {
+        throw new Error(
+          `workspace mode: planner assigned unknown targetRepo "${sub.targetRepo}" for sub-task "${sub.title}". Expected one of: ${[...repoNames].join(", ")}`,
+        );
+      }
+    }
+  }
   return parsed;
 }
 
@@ -145,15 +166,18 @@ export async function runSummarizer(opts: {
     role?: string;
     status: string;
     report: string;
+    targetRepo?: string | null;
   }>;
   eventsPath?: string;
   inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
+  repos?: RepoInfo[];
 }): Promise<{ summary: string; status: string }> {
   const prompt = buildSummaryPrompt({
     task: opts.task,
     cwd: opts.cwd,
     subTaskReports: opts.subTaskReports,
+    ...(opts.repos ? { repos: opts.repos } : {}),
   });
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;

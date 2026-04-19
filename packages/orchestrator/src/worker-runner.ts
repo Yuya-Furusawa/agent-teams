@@ -7,7 +7,11 @@ import {
   writeReport,
   Storage,
 } from "@agent-teams/storage";
-import { buildWorkerAppendedSystemPrompt, buildWorkerPrompt } from "./worker-contract.js";
+import {
+  buildWorkerAppendedSystemPrompt,
+  buildWorkerPrompt,
+  type PeerRepoInfo,
+} from "./worker-contract.js";
 
 export interface WorkerRunParams {
   taskId: string;
@@ -20,6 +24,8 @@ export interface WorkerRunParams {
   cwd: string;
   model?: string;
   inlineAgents: Record<string, InlineAgentDefinition>;
+  targetRepo?: { name: string; path: string; role?: string };
+  peerRepos?: PeerRepoInfo[];
 }
 
 export async function runWorker(params: WorkerRunParams): Promise<{
@@ -43,7 +49,10 @@ export async function runWorker(params: WorkerRunParams): Promise<{
       agent: params.agent,
       prompt,
       cwd: params.cwd,
-      appendSystemPrompt: buildWorkerAppendedSystemPrompt(path, params.agent),
+      appendSystemPrompt: buildWorkerAppendedSystemPrompt(path, params.agent, {
+        ...(params.targetRepo ? { targetRepo: params.targetRepo } : {}),
+        ...(params.peerRepos ? { peerRepos: params.peerRepos } : {}),
+      }),
       includeHookEvents: true,
       permissionMode: "bypassPermissions",
       model: params.model,
