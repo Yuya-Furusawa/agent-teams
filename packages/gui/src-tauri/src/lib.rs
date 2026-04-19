@@ -9,7 +9,7 @@ use crate::db::Db;
 use crate::models::{ReportKind, Task, TaskDetail};
 use crate::reports::Reports;
 use std::path::PathBuf;
-use tauri::{Manager, State};
+use tauri::State;
 
 struct AppState {
     db: Db,

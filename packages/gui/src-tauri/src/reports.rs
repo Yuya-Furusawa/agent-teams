@@ -26,24 +26,6 @@ impl Reports {
                 .join("report.md"),
         )
     }
-
-    /// Known-by-convention supplementary file paths. Documented here so the
-    /// failure-state UI can point the user at them even though the storage
-    /// package does not currently expose helpers for them.
-    pub fn supplementary_paths(&self, task_id: &str) -> SupplementaryPaths {
-        let base = self.root.join(task_id);
-        SupplementaryPaths {
-            planner_events: base.join("planner-events.jsonl"),
-            triage_events: base.join("triage-events.jsonl"),
-            summarizer_events: base.join("summarizer-events.jsonl"),
-        }
-    }
-}
-
-pub struct SupplementaryPaths {
-    pub planner_events: PathBuf,
-    pub triage_events: PathBuf,
-    pub summarizer_events: PathBuf,
 }
 
 fn read_capped(path: &Path) -> Result<Option<String>> {
