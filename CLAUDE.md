@@ -45,11 +45,12 @@ After editing source: `pnpm -r build` is enough. The `~/.local/bin/agent-teams*`
 
 1. `/team "<task>"` → slash command runs `agent-teams run`
 2. CLI loads `./agent-team.yaml`, creates task ULID, inserts a `tasks` row
-3. Planner: `claude -p --agent <planner> ...` with an appended system prompt demanding a closing fenced JSON block. Events are tee'd to `~/.agent-teams/tasks/<id>/planner-events.jsonl`
-4. agent-runner parses the closing JSON (either from a `result` event or via a fenced-block fallback on `lastText`)
-5. For each sub-task, orchestrator creates a fresh terminal pane with `cmux new-pane --type terminal` and sends `agent-teams-internal worker <task> <sub>` to its selected surface
-6. Each worker writes raw stream-json events to `agents/<id>/events.jsonl` and writes `report.md` as its final step (appended-system-prompt contract). Fallback: if no file is written, the worker's last assistant text is saved as the report
-7. Orchestrator polls SQLite (`sub_tasks.status`) until all workers finish, then re-runs the planner in summarizer mode → `summary.md`
+3. **Triage**: `Sage` runs with the full roster; classifies difficulty (trivial / small / medium / large / xlarge) and selects the smallest sufficient subset of agents. Events → `triage-events.jsonl`
+4. **Plan**: `Sage` runs again with the restricted roster + difficulty hint; outputs sub-tasks whose count matches the difficulty (trivial=1, small=1–2, medium=2–3, large=3–5, xlarge=5–7). Events → `planner-events.jsonl`
+5. `agent-runner` parses the closing JSON for each of (3) and (4) — either from a `result` event or a fenced-block fallback on `lastText`
+6. For each sub-task, orchestrator creates a fresh terminal pane with `cmux new-pane --type terminal` and sends `agent-teams-internal worker <task> <sub>` to its selected surface
+7. Each worker writes raw stream-json events to `agents/<id>/events.jsonl` and writes `report.md` as its final step (appended-system-prompt contract). Fallback: if no file is written, the worker's last assistant text is saved as the report
+8. Orchestrator polls SQLite (`sub_tasks.status`) until all workers finish, then re-runs Sage in **summarizer mode** → `summary.md`
 
 ## cmux model (important!)
 

@@ -182,14 +182,29 @@ Save the file and you're done — the agents directory is re-read on every `/tea
 Claude Code session
   └─ /team <task>
       └─ agent-teams run "<task>"
-          ├─ planner (claude -p --json-schema ...)  -> SubTask[]
+          ├─ triage    (Sage)  -> { difficulty, selectedAgents[] }
+          ├─ plan      (Sage)  -> SubTask[] (sub-task count fits difficulty)
           ├─ for each sub-task:
-          │   cmux new-split -> pane
+          │   cmux new-pane --type terminal -> pane
           │   cmux send "agent-teams-internal worker <task-id> <sub-id>"
           │     └─ child claude -p (stream-json) writes report.md
           ├─ wait for all sub-tasks (SQLite poll)
-          └─ summarizer (planner re-run) -> summary.md
+          └─ summarize (Sage)  -> summary.md
 ```
+
+### Difficulty-driven scaling
+
+Before planning, a **triage** step classifies the task as `trivial`, `small`, `medium`, `large`, or `xlarge` and picks the minimal sufficient subset of agents from the full roster. The planner then works **only with that subset**, and the number of sub-tasks is bounded by the difficulty:
+
+| difficulty | sub-task count | typical agents selected |
+| --- | --- | --- |
+| `trivial` | 1 | 1 (e.g. just Lin for a README typo) |
+| `small` | 1–2 | 1–2 |
+| `medium` | 2–3 | 2–4 |
+| `large` | 3–5 | 3–6 |
+| `xlarge` | 5–7 | up to 8 |
+
+This keeps trivial tasks from spinning up 8 panes and expensive tasks from being squeezed into 2. Triage events are logged to `~/.agent-teams/tasks/<id>/triage-events.jsonl`.
 
 See [`/Users/yuyafurusawa/.claude/plans/coding-agent-recursive-graham.md`](docs/plan.md) if you're the author; external users can read [docs/architecture.md](docs/architecture.md) (TODO).
 
