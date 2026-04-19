@@ -6,8 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "agent-teams": "dist/index.js",
-    "agent-teams-internal": "dist/internal-worker.js"
+    "agent-teams": "dist/index.js"
   },
   "scripts": {
     "build": "tsc --build"

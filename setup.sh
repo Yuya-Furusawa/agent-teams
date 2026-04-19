@@ -3,7 +3,7 @@
 # agent-teams setup
 #   - installs workspace dependencies (pnpm)
 #   - builds all packages
-#   - exposes the `agent-teams` / `agent-teams-internal` binaries on PATH
+#   - exposes the `agent-teams` binary on PATH
 #   - links commands/team.md into ~/.claude/commands/
 #   - creates ~/.agent-teams/ for task history
 #
@@ -50,7 +50,8 @@ step "checking prerequisites"
 require node
 require pnpm
 require claude
-require cmux
+# cmux is optional — if present, the orchestrator emits workspace status/log events;
+# if absent, those calls are skipped silently.
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 if [[ "$NODE_MAJOR" -lt 20 ]]; then
@@ -75,8 +76,8 @@ if [[ $WITH_GUI -eq 1 ]]; then
   fi
 fi
 
-step "marking CLI binaries executable"
-run "chmod +x \"$REPO_ROOT/packages/cli/dist/index.js\" \"$REPO_ROOT/packages/cli/dist/internal-worker.js\""
+step "marking CLI binary executable"
+run "chmod +x \"$REPO_ROOT/packages/cli/dist/index.js\""
 
 step "linking CLI into $AGENT_TEAMS_BIN_DIR"
 run "mkdir -p \"$AGENT_TEAMS_BIN_DIR\""
@@ -98,7 +99,6 @@ link_bin() {
   run "ln -s \"$target\" \"$link\""
 }
 link_bin "$REPO_ROOT/packages/cli/dist/index.js" "agent-teams"
-link_bin "$REPO_ROOT/packages/cli/dist/internal-worker.js" "agent-teams-internal"
 
 step "linking slash command into $CLAUDE_COMMANDS_DIR"
 run "mkdir -p \"$CLAUDE_COMMANDS_DIR\""
@@ -145,5 +145,5 @@ usage:
 
 data directory:   $AGENT_TEAMS_HOME
 slash command:    $CLAUDE_COMMANDS_DIR/team.md -> $SOURCE
-cli linked at:    $AGENT_TEAMS_BIN_DIR/agent-teams (and agent-teams-internal)$PATH_WARNING
+cli linked at:    $AGENT_TEAMS_BIN_DIR/agent-teams$PATH_WARNING
 EOF

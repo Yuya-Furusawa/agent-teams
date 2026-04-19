@@ -13,7 +13,6 @@
     "build": "tsc --build",
     "clean": "tsc --build --clean",
     "dev:cli": "tsx packages/cli/src/index.ts",
-    "dev:worker": "tsx packages/cli/src/internal-worker.ts",
     "gui": "pnpm --filter @agent-teams/gui tauri dev",
     "gui:build": "pnpm --filter @agent-teams/gui tauri build",
     "gui:test": "pnpm --filter @agent-teams/gui test",
