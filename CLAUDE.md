@@ -131,12 +131,37 @@ Earlier designs shared a role body across personas and overrode just persona + p
 
 All workers run in-process (same Node process as the orchestrator), each spawning its own `claude -p` child. WAL mode on SQLite is still enabled so GUI readers and any external tools can safely observe the DB while a run is active. Per-task filesystem paths are namespaced by ULID so workers never collide.
 
+## Multi-repo workspaces
+
+For tasks spanning multiple repos, define `~/.agent-teams/workspaces/<name>.yaml`:
+
+```yaml
+name: my-app
+repos:
+  - { name: frontend, path: /abs/path/fe, role: "React SPA" }
+  - { name: backend,  path: /abs/path/be, role: "Rails API" }
+```
+
+**No team config in the workspace file.** `resolveWorkspaceTeam` in `instance.ts` auto-constructs the team: planner = `Sage`, workers = every registered agent except the planner, defaults = `{ model: claude-opus-4-7, maxParallel: 3 }`.
+
+Invoked via `agent-teams run --workspace <name>` or `/team-ws <name> <task>`. Flow differs from single-repo only in:
+
+1. `runTask` loads the workspace, auto-resolves the team, and passes `repos` to triage/planner/summarizer prompts
+2. Planner schema requires `targetRepo` per sub-task (validated against the workspace repo list)
+3. `resolveWorkerScope` computes each worker's `cwd = repo.path` and injects `peerRepos` (read-only reference) into the worker's appended system prompt
+4. `tasks.workspace_name`, `tasks.repos`, `sub_tasks.target_repo` columns (nullable, auto-migrated) record workspace state for the GUI
+
+GUI: `Task.workspace` renders a badge on the task row; `SubTask.targetRepo` renders a badge in the agent sidebar. Added via `list_workspaces` Tauri command + additional SELECT projections — see `packages/gui/src-tauri/src/db.rs` and `packages/gui/src-tauri/src/lib.rs`.
+
+Single-repo mode (`/team` + `agent-team.yaml`) is unchanged and fully supported.
+
 ## Environment variables
 
 - `AGENT_TEAMS_HOME` (default `~/.agent-teams`) — data root
 - `AGENT_TEAMS_DB` — SQLite path override
+- `AGENT_TEAMS_WORKSPACES_DIR` (default `$AGENT_TEAMS_HOME/workspaces`) — workspace YAML location
 - `AGENT_TEAMS_BIN_DIR` (default `~/.local/bin`) — where `setup.sh` drops bin symlinks
-- `CLAUDE_COMMANDS_DIR` (default `~/.claude/commands`) — where `setup.sh` puts the slash command
+- `CLAUDE_COMMANDS_DIR` (default `~/.claude/commands`) — where `setup.sh` puts the slash commands
 
 ## Out of scope (MVP)
 

@@ -28,9 +28,9 @@ cd agent-teams
 `setup.sh` will:
 
 1. `pnpm install` and `pnpm -r build`
-2. symlink `agent-teams` / `agent-teams-internal` into `~/.local/bin/` (override with `AGENT_TEAMS_BIN_DIR`)
-3. symlink `commands/team.md` to `~/.claude/commands/team.md`
-4. create `~/.agent-teams/` for task history
+2. symlink `agent-teams` into `~/.local/bin/` (override with `AGENT_TEAMS_BIN_DIR`)
+3. symlink `commands/team.md` and `commands/team-ws.md` to `~/.claude/commands/`
+4. create `~/.agent-teams/` (tasks + workspaces subdirs) for task history and workspace configs
 
 Make sure `~/.local/bin` is on your `PATH` — if it isn't, `setup.sh` prints the line to add to your shell rc at the end.
 
@@ -61,6 +61,41 @@ You can also invoke the CLI directly from a terminal:
 ```bash
 agent-teams run "add a hello-world section to the README"
 ```
+
+### Multi-repo workspaces
+
+For tasks that span multiple repos (e.g., adding a feature that touches both a frontend and backend repo), define a **workspace** in `~/.agent-teams/workspaces/<name>.yaml`:
+
+```yaml
+name: my-app
+repos:
+  - name: frontend
+    path: /Users/me/Works/my-app-frontend
+    role: "React SPA. API client は src/api/"
+  - name: backend
+    path: /Users/me/Works/my-app-backend
+    role: "Rails API. controllers は app/controllers/api/"
+```
+
+No team definition is required — the orchestrator automatically uses `Sage` as planner and all other bundled agents as workers. Triage will pick the smallest sufficient subset based on the task.
+
+Then run from any Claude Code session:
+
+```
+/team-ws my-app "ユーザープロフィール編集機能を追加。backend は PATCH /users/:id、frontend は編集フォーム"
+```
+
+or directly:
+
+```bash
+agent-teams run --workspace my-app "..."
+```
+
+Each sub-task is executed with its assigned repo as the working directory, and the worker's system prompt includes the list of peer repos as read-only reference (for looking up API contracts, shared types, etc.).
+
+Helpers: `agent-teams workspace list` prints configured workspace names; `agent-teams workspace show <name>` prints the resolved config with absolute paths.
+
+Override workspace storage with `AGENT_TEAMS_WORKSPACES_DIR=/custom/path`.
 
 ## Configuration
 
