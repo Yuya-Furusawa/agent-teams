@@ -3,12 +3,14 @@ import { TaskList } from "./components/TaskList";
 import { AgentSidebar } from "./components/AgentSidebar";
 import { ReportView } from "./components/ReportView";
 import { EmptyState } from "./components/EmptyState";
+import { CalendarPicker } from "./components/CalendarPicker";
 import {
   getReport,
   getTaskDetail,
   listTasks,
   onTasksChanged,
 } from "./lib/ipc";
+import { toLocalDateKey } from "./lib/time";
 import type { ReportKind, Task, TaskDetail } from "./lib/types";
 
 export function App(): JSX.Element {
@@ -20,6 +22,10 @@ export function App(): JSX.Element {
   const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
+  const [selectedDateKey, setSelectedDateKey] = useState<string>(() =>
+    toLocalDateKey(Date.now()),
+  );
+  const [userPickedDate, setUserPickedDate] = useState(false);
 
   const bump = useCallback(() => setGeneration((g) => g + 1), []);
 
@@ -83,9 +89,32 @@ export function App(): JSX.Element {
     return "Report not written yet.";
   }, [selectedKind]);
 
+  const activeDateKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of tasks) s.add(toLocalDateKey(t.createdAt));
+    return s;
+  }, [tasks]);
+
+  const tasksForSelectedDay = useMemo(
+    () => tasks.filter((t) => toLocalDateKey(t.createdAt) === selectedDateKey),
+    [tasks, selectedDateKey],
+  );
+
+  // If the user hasn't picked a day yet, follow the latest task.
+  useEffect(() => {
+    if (userPickedDate || tasks.length === 0) return;
+    const newest = tasks.reduce((acc, t) => (t.createdAt > acc ? t.createdAt : acc), 0);
+    if (newest > 0) setSelectedDateKey(toLocalDateKey(newest));
+  }, [tasks, userPickedDate]);
+
+  const handleDatePick = useCallback((dateKey: string) => {
+    setUserPickedDate(true);
+    setSelectedDateKey(dateKey);
+  }, []);
+
   return (
     <div className="h-full w-full grid grid-cols-[260px_220px_1fr] bg-neutral-950 text-neutral-100">
-      <aside className="border-r border-neutral-800">
+      <aside className="border-r border-neutral-800 flex flex-col min-h-0">
         <header className="px-3 py-2 text-xs uppercase tracking-wide text-neutral-500 border-b border-neutral-800 flex items-center justify-between">
           <span>Tasks</span>
           <button
@@ -94,7 +123,25 @@ export function App(): JSX.Element {
             title="Refresh"
           >↻</button>
         </header>
-        <TaskList tasks={tasks} selectedId={selectedTaskId} onSelect={setSelectedTaskId} />
+        <CalendarPicker
+          selectedDateKey={selectedDateKey}
+          onSelect={handleDatePick}
+          activeDateKeys={activeDateKeys}
+        />
+        <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-neutral-500 border-b border-neutral-800 flex items-center justify-between">
+          <span>{selectedDateKey}</span>
+          <span>{tasksForSelectedDay.length}件</span>
+        </div>
+        <div className="flex-1 min-h-0">
+          <TaskList
+            tasks={tasksForSelectedDay}
+            selectedId={selectedTaskId}
+            onSelect={setSelectedTaskId}
+            emptyHint={
+              tasks.length === 0 ? undefined : <>この日のタスクはありません。</>
+            }
+          />
+        </div>
       </aside>
       <aside>
         {detail ? (
