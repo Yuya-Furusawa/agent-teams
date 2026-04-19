@@ -113,8 +113,8 @@ export function App(): JSX.Element {
   }, []);
 
   return (
-    <div className="h-full w-full grid grid-cols-[260px_220px_1fr] bg-neutral-950 text-neutral-100">
-      <aside className="border-r border-neutral-800 flex flex-col min-h-0">
+    <div className="h-full w-full grid grid-cols-[260px_220px_1fr] bg-neutral-950 text-neutral-100 overflow-hidden">
+      <aside className="border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden">
         <header className="px-3 py-2 text-xs uppercase tracking-wide text-neutral-500 border-b border-neutral-800 flex items-center justify-between">
           <span>Tasks</span>
           <button
@@ -143,25 +143,27 @@ export function App(): JSX.Element {
           />
         </div>
       </aside>
-      <aside>
+      <aside className="min-h-0 overflow-hidden">
         {detail ? (
           <AgentSidebar detail={detail} selected={selectedKind} onSelect={setSelectedKind} />
         ) : (
           <EmptyState title="Select a task" />
         )}
       </aside>
-      <main className="min-w-0">
+      <main className="min-w-0 min-h-0 overflow-hidden flex flex-col">
         {error && (
-          <div className="bg-bad/20 text-bad text-xs px-3 py-2 border-b border-bad/40 flex items-center gap-3">
+          <div className="bg-bad/20 text-bad text-xs px-3 py-2 border-b border-bad/40 flex items-center gap-3 shrink-0">
             <span className="flex-1">{error}</span>
             <button onClick={() => setError(null)} className="hover:text-neutral-100">✕</button>
           </div>
         )}
-        {selectedTaskId ? (
-          <ReportView body={report} loading={reportLoading} missingLabel={missingLabel} />
-        ) : (
-          <EmptyState title="No task selected" hint="Pick a task from the left to view its summary and per-agent reports." />
-        )}
+        <div className="flex-1 min-h-0">
+          {selectedTaskId ? (
+            <ReportView body={report} loading={reportLoading} missingLabel={missingLabel} />
+          ) : (
+            <EmptyState title="No task selected" hint="Pick a task from the left to view its summary and per-agent reports." />
+          )}
+        </div>
       </main>
     </div>
   );
