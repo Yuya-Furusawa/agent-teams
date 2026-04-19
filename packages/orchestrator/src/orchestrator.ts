@@ -22,10 +22,17 @@ import {
   buildInstanceInlineAgents,
   resolvePlannerInstance,
   resolveTeam,
+  resolveWorkspaceTeam,
 } from "./instance.js";
 import { runPlanner, runSummarizer, runTriage } from "./planner-runner.js";
 import { loadTeam, validateTeamAgainstRegistry } from "./team.js";
 import { runWorker } from "./worker-runner.js";
+import {
+  loadWorkspace,
+  workspaceRepoByName,
+  type Repo,
+  type Workspace,
+} from "./workspace.js";
 
 const DEFAULT_MAX_PARALLEL = 3;
 
@@ -33,6 +40,7 @@ export interface RunTaskOptions {
   description: string;
   cwd?: string;
   teamPath?: string;
+  workspace?: string;
 }
 
 export interface RunTaskResult {
@@ -42,11 +50,24 @@ export interface RunTaskResult {
 }
 
 export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
-  const cwd = opts.cwd ?? process.cwd();
-  const teamPath = opts.teamPath ?? `${cwd}/agent-team.yaml`;
-  const team = loadTeam(teamPath);
-
   const registry = loadAgentRegistry();
+
+  let ws: Workspace | undefined;
+  let team;
+  let cwd: string;
+
+  if (opts.workspace) {
+    ws = loadWorkspace(opts.workspace);
+    team = resolveWorkspaceTeam(ws.name, registry);
+    // In workspace mode cwd is symbolic; each worker runs in its target repo.
+    // Use the first repo as the planner/triage/summarizer cwd (they need *some* dir to run in).
+    cwd = ws.repos[0]!.path;
+  } else {
+    cwd = opts.cwd ?? process.cwd();
+    const teamPath = opts.teamPath ?? `${cwd}/agent-team.yaml`;
+    team = loadTeam(teamPath);
+  }
+
   validateTeamAgainstRegistry(team, registry);
   const workerInstances = resolveTeam(team, registry);
   const plannerInstance = resolvePlannerInstance(team, registry);
@@ -54,6 +75,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   const inlineAgents = buildInstanceInlineAgents([...workerInstances, plannerInstance]);
   const roleOf = (name: string): string | undefined =>
     instancesByName.get(name)?.role;
+  const repos = ws?.repos;
 
   const storage = new Storage();
   const taskId = ulid();
@@ -67,6 +89,8 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
     team_name: team.name,
     status: "planning",
     created_at: Date.now(),
+    workspace_name: ws?.name ?? null,
+    repos: ws ? JSON.stringify(ws.repos) : null,
   });
 
   const workspace = await currentWorkspace().catch(() => null);
@@ -91,6 +115,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       roster: fullRoster,
       eventsPath: join(taskDir(taskId), "triage-events.jsonl"),
       inlineAgents,
+      ...(repos ? { repos } : {}),
     });
 
     const selectedSet = new Set(triage.selectedAgents);
@@ -119,9 +144,10 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
         description: i.description,
       })),
       difficulty: triage.difficulty,
-      triageRationale: triage.rationale,
+      ...(triage.rationale ? { triageRationale: triage.rationale } : {}),
       eventsPath: join(taskDir(taskId), "planner-events.jsonl"),
       inlineAgents,
+      ...(repos ? { repos } : {}),
     });
 
     if (workspace) {
@@ -143,6 +169,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
         assigned_agent: sub.assignedAgent,
         status: "pending",
         created_at: Date.now(),
+        target_repo: sub.targetRepo ?? null,
       });
       initAgentDir(taskId, id);
     }
@@ -153,11 +180,14 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       cwd,
       team: team.name,
       status: "running",
+      workspace: ws?.name ?? null,
+      repos: ws ? ws.repos : null,
       subTasks: subTasks.map(({ id, plan: sub }) => ({
         id,
         title: sub.title,
         assignedAgent: sub.assignedAgent,
         status: "pending",
+        targetRepo: sub.targetRepo ?? null,
       })),
       createdAt: Date.now(),
       completedAt: null,
@@ -193,6 +223,12 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       });
       storage.updateSubTaskStatus(entry.id, "running");
 
+      const { workerCwd, targetRepo, peerRepos } = resolveWorkerScope(
+        ws,
+        entry.plan.targetRepo,
+        cwd,
+      );
+
       try {
         await runWorker({
           taskId,
@@ -201,10 +237,12 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
           originalTask: opts.description,
           subTaskTitle: entry.plan.title,
           subTaskPrompt: entry.plan.prompt,
-          rationale: entry.plan.rationale,
-          cwd,
-          model: team.defaults?.model,
+          ...(entry.plan.rationale ? { rationale: entry.plan.rationale } : {}),
+          cwd: workerCwd,
+          ...(team.defaults?.model ? { model: team.defaults.model } : {}),
           inlineAgents,
+          ...(targetRepo ? { targetRepo } : {}),
+          ...(peerRepos && peerRepos.length > 0 ? { peerRepos } : {}),
         });
       } finally {
         completed++;
@@ -219,12 +257,13 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
     const subTaskReports = subTasks.map(({ id, plan: sub }) => ({
       title: sub.title,
       agent: sub.assignedAgent,
-      role: roleOf(sub.assignedAgent),
+      ...(roleOf(sub.assignedAgent) ? { role: roleOf(sub.assignedAgent)! } : {}),
       status: storage.db
         .prepare("SELECT status FROM sub_tasks WHERE id = ?")
         .pluck()
         .get(id) as string,
       report: readReport(taskId, id) ?? "",
+      targetRepo: sub.targetRepo ?? null,
     }));
 
     const summary = await runSummarizer({
@@ -235,6 +274,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       plannerAgentName: plannerInstance.name,
       eventsPath: join(taskDir(taskId), "summarizer-events.jsonl"),
       inlineAgents,
+      ...(repos ? { repos } : {}),
     });
     writeSummary(taskId, summary.summary);
 
@@ -248,11 +288,14 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       cwd,
       team: team.name,
       status,
+      workspace: ws?.name ?? null,
+      repos: ws ? ws.repos : null,
       subTasks: subTaskReports.map((r, i) => ({
         id: subTasks[i]!.id,
         title: r.title,
         assignedAgent: r.agent,
         status: r.status,
+        targetRepo: r.targetRepo ?? null,
       })),
       createdAt: Date.now(),
       completedAt: Date.now(),
@@ -308,6 +351,21 @@ async function finalizeWorkspaceStatus(
     level: status === "completed" ? "info" : "error",
     message: `task ${taskId} ${status}. summary: ${summaryPath}`,
   });
+}
+
+function resolveWorkerScope(
+  workspace: Workspace | undefined,
+  targetRepoName: string | undefined,
+  fallbackCwd: string,
+): {
+  workerCwd: string;
+  targetRepo?: Repo;
+  peerRepos?: Repo[];
+} {
+  if (!workspace) return { workerCwd: fallbackCwd };
+  const repo = workspaceRepoByName(workspace, targetRepoName) ?? workspace.repos[0]!;
+  const peers = workspace.repos.filter((r) => r.name !== repo.name);
+  return { workerCwd: repo.path, targetRepo: repo, peerRepos: peers };
 }
 
 async function runWithConcurrency<T>(
