@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentInfo,
   ReportKind,
   Task,
   TaskDetail,
@@ -20,6 +21,10 @@ export async function getReport(
   kind: ReportKind,
 ): Promise<string | null> {
   return invoke<string | null>("get_report", { taskId, kind });
+}
+
+export async function listAgents(): Promise<AgentInfo[]> {
+  return invoke<AgentInfo[]>("list_agents");
 }
 
 export async function listWorkspaces(): Promise<string[]> {

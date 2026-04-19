@@ -34,6 +34,11 @@ export interface TaskDetail {
 
 export type ReportKind = "summary" | { subTask: string };
 
+export interface AgentInfo {
+  name: string;
+  role: string | null;
+}
+
 export interface TasksChangedPayload {
   taskId: string | null;
 }

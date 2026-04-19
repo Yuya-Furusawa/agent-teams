@@ -1,8 +1,10 @@
+mod agents;
 mod db;
 mod models;
 mod reports;
 mod watcher;
 
+use crate::agents::AgentInfo;
 use crate::db::Db;
 use crate::models::{ReportKind, Task, TaskDetail};
 use crate::reports::Reports;
@@ -54,6 +56,11 @@ async fn get_task_detail(
     task_id: String,
 ) -> Result<Option<TaskDetail>, String> {
     state.db.get_task_detail(&task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_agents() -> Result<Vec<AgentInfo>, String> {
+    agents::list_agents().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -113,6 +120,7 @@ pub fn run() {
             list_tasks,
             get_task_detail,
             get_report,
+            list_agents,
             list_workspaces
         ])
         .run(tauri::generate_context!())

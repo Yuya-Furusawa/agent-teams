@@ -11,10 +11,12 @@ export function AgentSidebar({
   detail,
   selected,
   onSelect,
+  agentRoles,
 }: {
   detail: TaskDetail;
   selected: ReportKind;
   onSelect: (kind: ReportKind) => void;
+  agentRoles?: Record<string, string>;
 }): JSX.Element {
   const summaryKind: ReportKind = "summary";
   return (
@@ -34,6 +36,7 @@ export function AgentSidebar({
       {detail.subTasks.map((s) => {
         const kind: ReportKind = { subTask: s.id };
         const active = kindEquals(selected, kind);
+        const role = agentRoles?.[s.assignedAgent];
         return (
           <button
             key={s.id}
@@ -45,6 +48,11 @@ export function AgentSidebar({
           >
             <div className="text-sm truncate flex items-baseline gap-1.5">
               <span className="font-medium">{s.assignedAgent}</span>
+              {role && (
+                <span className="text-[10px] uppercase tracking-wide text-neutral-500 truncate">
+                  {role}
+                </span>
+              )}
               {s.targetRepo && (
                 <span className="text-[10px] px-1 py-0.5 rounded bg-neutral-700 text-neutral-200">
                   {s.targetRepo}

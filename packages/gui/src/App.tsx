@@ -7,6 +7,7 @@ import { CalendarPicker } from "./components/CalendarPicker";
 import {
   getReport,
   getTaskDetail,
+  listAgents,
   listTasks,
   onTasksChanged,
 } from "./lib/ipc";
@@ -26,6 +27,7 @@ export function App(): JSX.Element {
     toLocalDateKey(Date.now()),
   );
   const [userPickedDate, setUserPickedDate] = useState(false);
+  const [agentRoles, setAgentRoles] = useState<Record<string, string>>({});
 
   const bump = useCallback(() => setGeneration((g) => g + 1), []);
 
@@ -35,6 +37,21 @@ export function App(): JSX.Element {
       .then(setTasks)
       .catch((e) => setError(String(e)));
   }, [generation]);
+
+  // list_agents once on mount — role metadata rarely changes within a session
+  useEffect(() => {
+    listAgents()
+      .then((agents) => {
+        const map: Record<string, string> = {};
+        for (const a of agents) {
+          if (a.role) map[a.name] = a.role;
+        }
+        setAgentRoles(map);
+      })
+      .catch(() => {
+        // non-fatal: sidebar falls back to name-only
+      });
+  }, []);
 
   // get_task_detail when selection changes
   useEffect(() => {
@@ -145,7 +162,12 @@ export function App(): JSX.Element {
       </aside>
       <aside className="min-h-0 overflow-hidden">
         {detail ? (
-          <AgentSidebar detail={detail} selected={selectedKind} onSelect={setSelectedKind} />
+          <AgentSidebar
+            detail={detail}
+            selected={selectedKind}
+            onSelect={setSelectedKind}
+            agentRoles={agentRoles}
+          />
         ) : (
           <EmptyState title="Select a task" />
         )}
