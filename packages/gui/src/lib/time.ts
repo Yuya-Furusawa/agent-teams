@@ -8,3 +8,11 @@ export function relativeTime(fromMs: number, nowMs: number = Date.now()): string
   if (h < 24) return `${h}h`;
   return `${Math.floor(h / 24)}d`;
 }
+
+export function toLocalDateKey(msOrDate: number | Date): string {
+  const d = typeof msOrDate === "number" ? new Date(msOrDate) : msOrDate;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
