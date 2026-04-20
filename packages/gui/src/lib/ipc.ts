@@ -6,6 +6,7 @@ import type {
   Task,
   TaskDetail,
   TasksChangedPayload,
+  WorkflowGraph,
 } from "./types";
 
 export async function listTasks(limit = 100, offset = 0): Promise<Task[]> {
@@ -14,6 +15,10 @@ export async function listTasks(limit = 100, offset = 0): Promise<Task[]> {
 
 export async function getTaskDetail(taskId: string): Promise<TaskDetail | null> {
   return invoke<TaskDetail | null>("get_task_detail", { taskId });
+}
+
+export async function getWorkflow(taskId: string): Promise<WorkflowGraph | null> {
+  return invoke<WorkflowGraph | null>("get_workflow", { taskId });
 }
 
 export async function getReport(
