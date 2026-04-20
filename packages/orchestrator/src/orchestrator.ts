@@ -160,7 +160,21 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       plan: sub,
     }));
 
+    // Map planner-local ids (from plan.subTasks[i].id) to orchestrator-generated ULIDs
+    // so dependsOn can be resolved against stored sub_task ids.
+    const planIdToUlid = new Map<string, string>();
+    for (const { id, plan: sub } of subTasks) planIdToUlid.set(sub.id, id);
+    const dependsOnUlids = (sub: typeof plan.subTasks[number]): string[] =>
+      (sub.dependsOn ?? []).map((d) => {
+        const resolved = planIdToUlid.get(d);
+        if (!resolved) {
+          throw new Error(`sub-task "${sub.id}" depends on unknown id "${d}"`);
+        }
+        return resolved;
+      });
+
     for (const { id, plan: sub } of subTasks) {
+      const deps = dependsOnUlids(sub);
       storage.insertSubTask({
         id,
         task_id: taskId,
@@ -170,6 +184,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
         status: "pending",
         created_at: Date.now(),
         target_repo: sub.targetRepo ?? null,
+        depends_on: deps.length > 0 ? JSON.stringify(deps) : null,
       });
       initAgentDir(taskId, id);
     }
@@ -188,6 +203,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
         assignedAgent: sub.assignedAgent,
         status: "pending",
         targetRepo: sub.targetRepo ?? null,
+        dependsOn: dependsOnUlids(sub),
       })),
       createdAt: Date.now(),
       completedAt: null,
@@ -212,7 +228,13 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       });
     };
 
-    await runWithConcurrency(subTasks, maxParallel, async (entry) => {
+    const dagNodes = subTasks.map((entry) => ({
+      id: entry.id,
+      dependsOn: dependsOnUlids(entry.plan),
+      item: entry,
+    }));
+
+    await runDag(dagNodes, maxParallel, async (entry) => {
       const runId = ulid();
       storage.insertAgentRun({
         id: runId,
@@ -368,21 +390,55 @@ function resolveWorkerScope(
   return { workerCwd: repo.path, targetRepo: repo, peerRepos: peers };
 }
 
-async function runWithConcurrency<T>(
-  items: T[],
+interface DagNode<T> {
+  id: string;
+  dependsOn: string[];
+  item: T;
+}
+
+/**
+ * Runs each node once its `dependsOn` nodes have all completed (success OR failure).
+ * Inflight work is globally capped at `limit`. A dependency failure does not stop
+ * dependents from running — the worker itself decides how to react to missing
+ * upstream output (e.g. a reviewer can note "nothing to review"). Cycles and
+ * missing references are expected to be caught earlier by validatePlanDag; they
+ * are re-detected here as a safety net.
+ */
+async function runDag<T>(
+  nodes: DagNode<T>[],
   limit: number,
   fn: (item: T) => Promise<void>,
 ): Promise<void> {
   const cap = Math.max(1, limit);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(cap, items.length) }, async () => {
-    for (;;) {
-      const idx = cursor++;
-      if (idx >= items.length) return;
-      await fn(items[idx]!);
+  const done = new Set<string>();
+  const inflight = new Map<string, Promise<void>>();
+  const pending = new Map<string, DagNode<T>>();
+  for (const n of nodes) pending.set(n.id, n);
+
+  const canStart = (n: DagNode<T>): boolean => n.dependsOn.every((d) => done.has(d));
+
+  while (pending.size > 0 || inflight.size > 0) {
+    for (const [id, node] of pending) {
+      if (inflight.size >= cap) break;
+      if (!canStart(node)) continue;
+      pending.delete(id);
+      const p = fn(node.item)
+        .catch(() => {
+          // Swallow: the worker's try/finally below already records status;
+          // we still want dependents to unblock so the pipeline makes progress.
+        })
+        .finally(() => {
+          done.add(id);
+          inflight.delete(id);
+        });
+      inflight.set(id, p);
     }
-  });
-  await Promise.all(workers);
+    if (inflight.size === 0 && pending.size > 0) {
+      const stuck = [...pending.keys()].join(", ");
+      throw new Error(`DAG deadlocked (cycle or missing dep) at: ${stuck}`);
+    }
+    await Promise.race(inflight.values());
+  }
 }
 
 function truncate(s: string, n: number): string {
