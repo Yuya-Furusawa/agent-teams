@@ -7,6 +7,7 @@ dist/
 *.log
 .claude/settings.local.json
 .superpowers/
+docs/superpowers/
 
 # Rust / Tauri build artefacts
 target/
