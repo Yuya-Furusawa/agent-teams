@@ -23,6 +23,7 @@ export interface TaskSnapshot {
     assignedAgent: string;
     status: string;
     targetRepo?: string | null;
+    dependsOn?: string[];
   }>;
   createdAt: number;
   completedAt: number | null;

@@ -28,6 +28,8 @@ export interface SubTaskRow {
   created_at: number;
   completed_at: number | null;
   target_repo: string | null;
+  /** JSON-encoded array of sibling sub_task ids that must complete first. `null` = no dependencies. */
+  depends_on: string | null;
 }
 
 export interface AgentRunRow {
@@ -65,7 +67,8 @@ CREATE TABLE IF NOT EXISTS sub_tasks (
   status TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   completed_at INTEGER,
-  target_repo TEXT
+  target_repo TEXT,
+  depends_on TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sub_tasks_task_id ON sub_tasks(task_id);
@@ -107,6 +110,9 @@ export class Storage {
     if (!subColNames.has("target_repo")) {
       this.db.exec(`ALTER TABLE sub_tasks ADD COLUMN target_repo TEXT`);
     }
+    if (!subColNames.has("depends_on")) {
+      this.db.exec(`ALTER TABLE sub_tasks ADD COLUMN depends_on TEXT`);
+    }
   }
 
   close(): void {
@@ -142,17 +148,18 @@ export class Storage {
   }
 
   insertSubTask(
-    row: Omit<SubTaskRow, "completed_at" | "target_repo"> & {
+    row: Omit<SubTaskRow, "completed_at" | "target_repo" | "depends_on"> & {
       completed_at?: number | null;
       target_repo?: string | null;
+      depends_on?: string | null;
     },
   ): void {
     this.db
       .prepare(
-        `INSERT INTO sub_tasks (id, task_id, title, prompt, assigned_agent, status, created_at, completed_at, target_repo)
-         VALUES (@id, @task_id, @title, @prompt, @assigned_agent, @status, @created_at, @completed_at, @target_repo)`,
+        `INSERT INTO sub_tasks (id, task_id, title, prompt, assigned_agent, status, created_at, completed_at, target_repo, depends_on)
+         VALUES (@id, @task_id, @title, @prompt, @assigned_agent, @status, @created_at, @completed_at, @target_repo, @depends_on)`,
       )
-      .run({ completed_at: null, target_repo: null, ...row });
+      .run({ completed_at: null, target_repo: null, depends_on: null, ...row });
   }
 
   updateSubTaskStatus(id: string, status: SubTaskStatus, completedAt?: number | null): void {
