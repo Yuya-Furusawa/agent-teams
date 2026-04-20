@@ -2,22 +2,26 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { TaskList } from "./components/TaskList";
 import { AgentSidebar } from "./components/AgentSidebar";
 import { ReportView } from "./components/ReportView";
+import { WorkflowGraph } from "./components/WorkflowGraph";
+import { ReportDrawer } from "./components/ReportDrawer";
 import { EmptyState } from "./components/EmptyState";
 import { CalendarPicker } from "./components/CalendarPicker";
 import {
   getReport,
-  getTaskDetail,
+  getWorkflow,
   listAgents,
   listTasks,
   onTasksChanged,
 } from "./lib/ipc";
 import { toLocalDateKey } from "./lib/time";
-import type { ReportKind, Task, TaskDetail } from "./lib/types";
+import type { ReportKind, Task, WorkflowGraph as WorkflowGraphData } from "./lib/types";
+
+type ViewMode = "list" | "graph";
 
 export function App(): JSX.Element {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowGraphData | null>(null);
   const [selectedKind, setSelectedKind] = useState<ReportKind>("summary");
   const [report, setReport] = useState<string | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
@@ -28,17 +32,19 @@ export function App(): JSX.Element {
   );
   const [userPickedDate, setUserPickedDate] = useState(false);
   const [agentRoles, setAgentRoles] = useState<Record<string, string>>({});
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const detail = workflow?.detail ?? null;
 
   const bump = useCallback(() => setGeneration((g) => g + 1), []);
 
-  // list_tasks on mount + when generation changes
   useEffect(() => {
     listTasks()
       .then(setTasks)
       .catch((e) => setError(String(e)));
   }, [generation]);
 
-  // list_agents once on mount — role metadata rarely changes within a session
   useEffect(() => {
     listAgents()
       .then((agents) => {
@@ -53,21 +59,20 @@ export function App(): JSX.Element {
       });
   }, []);
 
-  // get_task_detail when selection changes
   useEffect(() => {
     if (!selectedTaskId) {
-      setDetail(null);
+      setWorkflow(null);
+      setDrawerOpen(false);
       return;
     }
-    getTaskDetail(selectedTaskId)
-      .then((d) => {
-        setDetail(d);
-        setSelectedKind("summary");
+    getWorkflow(selectedTaskId)
+      .then((w) => {
+        setWorkflow(w);
+        setSelectedKind((prev) => (prev === "plannerEvents" ? prev : "summary"));
       })
       .catch((e) => setError(String(e)));
   }, [selectedTaskId, generation]);
 
-  // get_report when selected doc changes
   useEffect(() => {
     if (!selectedTaskId) {
       setReport(null);
@@ -80,7 +85,6 @@ export function App(): JSX.Element {
       .finally(() => setReportLoading(false));
   }, [selectedTaskId, selectedKind, generation]);
 
-  // live updates
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -88,7 +92,6 @@ export function App(): JSX.Element {
       if (payload.taskId == null || payload.taskId === selectedTaskId) {
         bump();
       } else {
-        // silently refresh the list but don't touch the current detail fetch
         listTasks().then(setTasks).catch(() => {});
       }
     }).then((u) => {
@@ -103,6 +106,7 @@ export function App(): JSX.Element {
 
   const missingLabel = useMemo(() => {
     if (selectedKind === "summary") return "Summary not available yet.";
+    if (selectedKind === "plannerEvents") return "Planner events not recorded.";
     return "Report not written yet.";
   }, [selectedKind]);
 
@@ -117,7 +121,6 @@ export function App(): JSX.Element {
     [tasks, selectedDateKey],
   );
 
-  // If the user hasn't picked a day yet, follow the latest task.
   useEffect(() => {
     if (userPickedDate || tasks.length === 0) return;
     const newest = tasks.reduce((acc, t) => (t.createdAt > acc ? t.createdAt : acc), 0);
@@ -129,8 +132,13 @@ export function App(): JSX.Element {
     setSelectedDateKey(dateKey);
   }, []);
 
+  const handleGraphSelect = useCallback((kind: ReportKind) => {
+    setSelectedKind(kind);
+    setDrawerOpen(true);
+  }, []);
+
   return (
-    <div className="h-full w-full grid grid-cols-[260px_220px_1fr] bg-neutral-950 text-neutral-100 overflow-hidden">
+    <div className="h-full w-full grid grid-cols-[260px_1fr] bg-neutral-950 text-neutral-100 overflow-hidden">
       <aside className="border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden">
         <header className="px-3 py-2 text-xs uppercase tracking-wide text-neutral-500 border-b border-neutral-800 flex items-center justify-between">
           <span>Tasks</span>
@@ -160,33 +168,102 @@ export function App(): JSX.Element {
           />
         </div>
       </aside>
-      <aside className="min-h-0 overflow-hidden">
-        {detail ? (
-          <AgentSidebar
-            detail={detail}
-            selected={selectedKind}
-            onSelect={setSelectedKind}
-            agentRoles={agentRoles}
-          />
-        ) : (
-          <EmptyState title="Select a task" />
-        )}
-      </aside>
-      <main className="min-w-0 min-h-0 overflow-hidden flex flex-col">
-        {error && (
-          <div className="bg-bad/20 text-bad text-xs px-3 py-2 border-b border-bad/40 flex items-center gap-3 shrink-0">
-            <span className="flex-1">{error}</span>
-            <button onClick={() => setError(null)} className="hover:text-neutral-100">✕</button>
-          </div>
-        )}
-        <div className="flex-1 min-h-0">
-          {selectedTaskId ? (
-            <ReportView body={report} loading={reportLoading} missingLabel={missingLabel} />
+      <div className="flex flex-col min-h-0 min-w-0">
+        <header className="border-b border-neutral-800 flex items-center gap-1 px-3 py-1.5 text-xs shrink-0">
+          <ViewTab label="List" active={viewMode === "list"} onClick={() => setViewMode("list")} />
+          <ViewTab label="Graph" active={viewMode === "graph"} onClick={() => setViewMode("graph")} />
+          <div className="flex-1" />
+          {error && (
+            <span className="text-bad text-[11px] truncate max-w-[50%]" title={error}>
+              {error}
+              <button
+                onClick={() => setError(null)}
+                className="ml-2 hover:text-neutral-100"
+              >✕</button>
+            </span>
+          )}
+        </header>
+        <div className="flex-1 min-h-0 min-w-0 flex">
+          {viewMode === "list" ? (
+            <>
+              <aside className="w-[220px] shrink-0 min-h-0 overflow-hidden border-r border-neutral-800">
+                {detail ? (
+                  <AgentSidebar
+                    detail={detail}
+                    selected={selectedKind}
+                    onSelect={setSelectedKind}
+                    agentRoles={agentRoles}
+                  />
+                ) : (
+                  <EmptyState title="Select a task" />
+                )}
+              </aside>
+              <main className="flex-1 min-w-0 min-h-0">
+                {selectedTaskId ? (
+                  <ReportView body={report} loading={reportLoading} missingLabel={missingLabel} />
+                ) : (
+                  <EmptyState title="No task selected" hint="Pick a task from the left to view its summary and per-agent reports." />
+                )}
+              </main>
+            </>
           ) : (
-            <EmptyState title="No task selected" hint="Pick a task from the left to view its summary and per-agent reports." />
+            <>
+              <main className="flex-1 min-w-0 min-h-0">
+                {workflow ? (
+                  <WorkflowGraph
+                    graph={workflow}
+                    selected={drawerOpen ? selectedKind : null}
+                    onSelect={handleGraphSelect}
+                    agentRoles={agentRoles}
+                  />
+                ) : (
+                  <EmptyState
+                    title={selectedTaskId ? "Loading…" : "No task selected"}
+                    hint={
+                      selectedTaskId
+                        ? undefined
+                        : "Pick a task from the left to view its workflow."
+                    }
+                  />
+                )}
+              </main>
+              {drawerOpen && (
+                <div className="w-[420px] shrink-0 min-h-0">
+                  <ReportDrawer
+                    kind={selectedKind}
+                    body={report}
+                    loading={reportLoading}
+                    subTasks={detail?.subTasks ?? []}
+                    onClose={() => setDrawerOpen(false)}
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
-      </main>
+      </div>
     </div>
+  );
+}
+
+function ViewTab({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide ${
+        active ? "bg-neutral-800 text-neutral-100" : "text-neutral-500 hover:text-neutral-200"
+      }`}
+    >
+      {label}
+    </button>
   );
 }

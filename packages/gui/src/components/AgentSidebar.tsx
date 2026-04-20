@@ -2,7 +2,7 @@ import type { ReportKind, TaskDetail } from "../lib/types";
 import { StatusBadge } from "./StatusBadge";
 
 function kindEquals(a: ReportKind, b: ReportKind): boolean {
-  if (a === "summary" && b === "summary") return true;
+  if (typeof a === "string" && typeof b === "string") return a === b;
   if (typeof a === "object" && typeof b === "object") return a.subTask === b.subTask;
   return false;
 }
