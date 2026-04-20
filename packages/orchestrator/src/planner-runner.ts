@@ -12,6 +12,49 @@ import {
   type TaskPlan,
   type Triage,
 } from "./planner-schema.js";
+
+export function validatePlanDag(plan: TaskPlan): void {
+  const ids = new Set<string>();
+  for (const sub of plan.subTasks) {
+    if (ids.has(sub.id)) {
+      throw new Error(`planner produced duplicate sub-task id "${sub.id}"`);
+    }
+    ids.add(sub.id);
+  }
+  for (const sub of plan.subTasks) {
+    for (const dep of sub.dependsOn ?? []) {
+      if (!ids.has(dep)) {
+        throw new Error(
+          `sub-task "${sub.id}" depends on unknown id "${dep}"`,
+        );
+      }
+      if (dep === sub.id) {
+        throw new Error(`sub-task "${sub.id}" depends on itself`);
+      }
+    }
+  }
+  // Kahn-style cycle detection
+  const remaining = new Map<string, Set<string>>();
+  for (const sub of plan.subTasks) {
+    remaining.set(sub.id, new Set(sub.dependsOn ?? []));
+  }
+  const ready: string[] = [];
+  for (const [id, deps] of remaining) if (deps.size === 0) ready.push(id);
+  let visited = 0;
+  while (ready.length > 0) {
+    const id = ready.shift()!;
+    visited++;
+    for (const [other, deps] of remaining) {
+      if (deps.delete(id) && deps.size === 0) ready.push(other);
+    }
+  }
+  if (visited !== plan.subTasks.length) {
+    const stuck = [...remaining.entries()]
+      .filter(([, d]) => d.size > 0)
+      .map(([id]) => id);
+    throw new Error(`plan has a dependency cycle involving: ${stuck.join(", ")}`);
+  }
+}
 import type { Team } from "./team.js";
 
 function eventLogger(path: string): (event: StreamJsonEvent) => void {
@@ -136,6 +179,8 @@ export async function runPlanner(opts: {
       );
     }
   }
+
+  validatePlanDag(parsed);
 
   if (opts.repos && opts.repos.length > 0) {
     const repoNames = new Set(opts.repos.map((r) => r.name));

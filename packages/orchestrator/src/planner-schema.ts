@@ -76,6 +76,13 @@ Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code
 }
 
 export const SubTaskPlanSchema = z.object({
+  id: z
+    .string()
+    .min(1)
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .describe(
+      "Plan-local identifier for this sub-task. Other sub-tasks in the same plan reference this via dependsOn. Must be unique within the plan and contain only letters, digits, underscore, or hyphen.",
+    ),
   title: z.string().min(1).describe("Short imperative title for the sub-task"),
   prompt: z
     .string()
@@ -94,6 +101,12 @@ export const SubTaskPlanSchema = z.object({
     .optional()
     .describe(
       "Name of the primary repo this sub-task operates in. Required in workspace mode (must match one of the repo names provided); omitted in single-repo mode.",
+    ),
+  dependsOn: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Ids of sibling sub-tasks that must complete before this one starts. Empty/absent means the sub-task has no prerequisites and runs in the initial layer.",
     ),
 });
 
@@ -135,13 +148,15 @@ export const PLAN_JSON_SCHEMA = {
       maxItems: 8,
       items: {
         type: "object",
-        required: ["title", "prompt", "assignedAgent"],
+        required: ["id", "title", "prompt", "assignedAgent"],
         properties: {
+          id: { type: "string" },
           title: { type: "string" },
           prompt: { type: "string" },
           assignedAgent: { type: "string" },
           rationale: { type: "string" },
           targetRepo: { type: "string" },
+          dependsOn: { type: "array", items: { type: "string" } },
         },
       },
     },
@@ -210,14 +225,22 @@ Schema:
   "overallStrategy": "string (one paragraph)",
   "subTasks": [
     {
+      "id": "string (short unique slug, letters/digits/underscore/hyphen only — referenced from dependsOn)",
       "title": "string (short imperative)",
       "prompt": "string (detailed instructions for the worker)",
       "assignedAgent": "string (must be exactly one of the roster names above)",
-      "rationale": "string (optional; one sentence)"${schemaTargetRepoField}
+      "rationale": "string (optional; one sentence)",
+      "dependsOn": ["string (optional; ids of sibling sub-tasks that must finish first)"]${schemaTargetRepoField}
     }
   ]
 }
 \`\`\`
+
+# Ordering via dependsOn
+- Sub-tasks with no \`dependsOn\` run in the initial layer (possibly in parallel).
+- If a sub-task consumes another's output (e.g. a code-reviewer reads an implementer's diff, a qa-engineer tests an implementation, a docs-writer documents a shipped feature), put the prerequisite sub-task ids in \`dependsOn\`.
+- Multiple reviewers of the same implementation SHARE the same \`dependsOn\` (they run in parallel after the implementation). Only chain reviewers when a later reviewer must see the earlier reviewer's feedback.
+- Never create cycles. Every id in \`dependsOn\` must reference another sub-task in this same plan.
 
 Do not assign agents that are not in the roster. Do not wrap the JSON in any additional keys. Emit the block verbatim as your closing message.
 `.trim();
