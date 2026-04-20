@@ -1,8 +1,10 @@
 # agent-teams
 
-Orchestrate multiple Claude Code instances as a coding team, observed live through cmux panes.
+Orchestrate multiple Claude Code instances as a coding team.
 
-You hit `/team "<task>"` inside a Claude Code session; a **planner** sub-agent decomposes the task and chooses which **worker** sub-agents run each part; the orchestrator spawns each worker in its own cmux pane and produces a combined summary when they all finish.
+You hit `/team "<task>"` inside a Claude Code session; a **planner** sub-agent triages and decomposes the task into a DAG of sub-tasks; the orchestrator runs each worker as an in-process `claude -p` child process (capped by `maxParallel`), respecting `dependsOn` ordering (e.g. reviewers run only after their implementers finish); a **summarizer** produces a combined report when everything lands.
+
+An optional Tauri desktop GUI ships a live workflow graph (Planning → workers → Summary, with DAG layers) and a per-agent report viewer.
 
 ## Status
 
@@ -14,8 +16,9 @@ MVP. Expect rough edges. Designed for personal use on macOS; Linux should work b
 - Node.js 20 or later
 - [pnpm](https://pnpm.io) 10+
 - [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) CLI (`claude`) with agents registered (`claude agents list`)
-- [cmux](https://cmux.sh) running — the orchestrator drives it via its CLI to open panes
 - `better-sqlite3` builds a native module, so you need a C++ toolchain (Xcode command-line tools on macOS)
+- Optional: [cmux](https://cmux.sh) — if present, the orchestrator emits status and log events into the containing cmux workspace. Workers run in-process regardless, so agent-teams works fine without cmux.
+- Optional: Rust toolchain (`rustup`) — required only when building the Tauri desktop GUI.
 
 ## Install
 
@@ -42,19 +45,26 @@ Pass `--yes` to skip overwrite prompts and `--dry-run` to preview actions.
 ./setup.sh --with-gui
 ```
 
-Builds the Tauri report viewer in `packages/gui/` and drops the `.app` / `.dmg` bundle under `dist-gui/`. See [`docs/superpowers/specs/2026-04-19-tauri-gui-report-viewer-design.md`](docs/superpowers/specs/2026-04-19-tauri-gui-report-viewer-design.md) for scope.
+Builds the Tauri report viewer in `packages/gui/` and drops the `.app` / `.dmg` bundle under `dist-gui/`.
+
+The GUI has two view modes:
+
+- **List** — three-column layout (calendar + task list / agent sidebar / report markdown). The report pane renders `summary.md` or any agent's `report.md`.
+- **Graph** — live workflow visualization. `Planning (Sage)` → DAG-layered workers → `Summary (Sage)` as a pinch-zoomable SVG pipeline. Nodes pulse while running, and clicking a node opens a side drawer with that node's report (or planner events / sub-task list for the Planning node).
+
+Live updates come from a filesystem watcher on `~/.agent-teams/tasks/`, so both views refresh while a run is in flight.
 
 ## Usage
 
 1. Drop an `agent-team.yaml` in the repo you want to drive (copy from the root of this repo).
-2. Open that repo inside a cmux workspace and start a Claude Code session in one of its panes.
+2. Start a Claude Code session in that repo (inside cmux for status/log observability, or anywhere — it's optional).
 3. In the Claude Code prompt, run:
 
    ```
    /team "add a hello-world section to the README"
    ```
 
-4. The orchestrator opens one cmux pane per sub-task, each runs the assigned worker agent, and the final summary markdown is written to `~/.agent-teams/tasks/<task-id>/summary.md`.
+4. The orchestrator triages + plans, then runs each sub-task as an in-process `claude -p` child (capped by `maxParallel`, respecting the plan's `dependsOn` DAG). Per-agent reports land at `~/.agent-teams/tasks/<task-id>/agents/<sub-id>/report.md` and the team summary at `~/.agent-teams/tasks/<task-id>/summary.md`.
 
 You can also invoke the CLI directly from a terminal:
 
@@ -193,23 +203,32 @@ Save the file and you're done — the agents directory is re-read on every `/tea
 | --- | --- | --- |
 | `AGENT_TEAMS_HOME` | `~/.agent-teams` | data directory (SQLite db + per-task files) |
 | `AGENT_TEAMS_DB` | `$AGENT_TEAMS_HOME/db.sqlite` | SQLite path override |
+| `AGENT_TEAMS_WORKSPACES_DIR` | `$AGENT_TEAMS_HOME/workspaces` | multi-repo workspace YAML location |
+| `AGENT_TEAMS_AGENTS_DIR` | `<repo>/agents` | bundled agent markdown directory (override to swap the roster per environment) |
 | `AGENT_TEAMS_BIN_DIR` | `~/.local/bin` | where `setup.sh` drops `agent-teams` symlinks |
-| `CLAUDE_COMMANDS_DIR` | `~/.claude/commands` | where `setup.sh` symlinks the slash command |
+| `CLAUDE_COMMANDS_DIR` | `~/.claude/commands` | where `setup.sh` symlinks the slash commands |
 
 ## Data layout
 
 ```
 ~/.agent-teams/
-├── db.sqlite                    # tasks / sub_tasks / agent_runs
+├── db.sqlite                        # tasks / sub_tasks / agent_runs (WAL mode)
+├── workspaces/                      # optional multi-repo workspace configs
+│   └── <name>.yaml
 └── tasks/
     └── <task-ulid>/
-        ├── task.json            # immutable snapshot of inputs + plan
-        ├── summary.md           # team-wide summary
+        ├── task.json                # immutable snapshot of inputs + plan
+        ├── triage-events.jsonl      # Sage's triage stream-json
+        ├── planner-events.jsonl     # Sage's planning stream-json
+        ├── summarizer-events.jsonl  # Sage's summarizer stream-json
+        ├── summary.md               # team-wide summary (Japanese markdown)
         └── agents/
             └── <sub-task-ulid>/
-                ├── events.jsonl # raw claude stream-json events
-                └── report.md    # per-agent final report
+                ├── events.jsonl     # worker stream-json events
+                └── report.md        # per-agent final report
 ```
+
+`sub_tasks.depends_on` is a JSON array of sibling sub-task ids (`NULL` = no prerequisites). The orchestrator schedules via topological order; the GUI's `layoutWorkflow` renders those edges as worker layers.
 
 ## Architecture
 
@@ -218,14 +237,15 @@ Claude Code session
   └─ /team <task>
       └─ agent-teams run "<task>"
           ├─ triage    (Sage)  -> { difficulty, selectedAgents[] }
-          ├─ plan      (Sage)  -> SubTask[] (sub-task count fits difficulty)
-          ├─ for each sub-task:
-          │   cmux new-pane --type terminal -> pane
-          │   cmux send "agent-teams-internal worker <task-id> <sub-id>"
-          │     └─ child claude -p (stream-json) writes report.md
-          ├─ wait for all sub-tasks (SQLite poll)
+          ├─ plan      (Sage)  -> SubTask[] with id + dependsOn (DAG)
+          ├─ runDag(subTasks, maxParallel):
+          │     each ready sub-task -> child claude -p (stream-json)
+          │     writes events.jsonl + report.md on completion
+          ├─ wait for all sub-tasks to terminate (success or failure)
           └─ summarize (Sage)  -> summary.md
 ```
+
+Workers are spawned as in-process `claude -p` child processes directly by the orchestrator — no cmux panes are created. The `runDag` scheduler keeps `maxParallel` workers inflight and releases dependents once every prerequisite finishes. A dependency's failure does not block its dependents (the worker itself decides how to react to missing upstream output).
 
 ### Difficulty-driven scaling
 
@@ -239,16 +259,17 @@ Before planning, a **triage** step classifies the task as `trivial`, `small`, `m
 | `large` | 3–5 | 3–6 |
 | `xlarge` | 5–7 | up to 8 |
 
-This keeps trivial tasks from spinning up 8 panes and expensive tasks from being squeezed into 2. Triage events are logged to `~/.agent-teams/tasks/<id>/triage-events.jsonl`.
+This keeps trivial tasks from running 8 workers in parallel and expensive tasks from being squeezed into 2. Triage events are logged to `~/.agent-teams/tasks/<id>/triage-events.jsonl`.
 
-See [`/Users/yuyafurusawa/.claude/plans/coding-agent-recursive-graham.md`](docs/plan.md) if you're the author; external users can read [docs/architecture.md](docs/architecture.md) (TODO).
+### DAG dependencies
+
+Sage emits `id` and optional `dependsOn: string[]` for each sub-task in the plan. The orchestrator schedules workers topologically — e.g. `Iris` (code-reviewer) waits for `Kai` (implementer) to finish, but two reviewers with the same `dependsOn` run in parallel after the implementer. Cycles and unresolved references are rejected by `validatePlanDag` before any worker starts.
 
 ## Non-goals (MVP)
 
-- GUI (planned: Tauri desktop app for reports)
-- Multi-repo workspace management (planned)
-- DAG-based sub-task dependencies (planned)
+- DAG sub-task dependencies with conditional branching (the current DAG is unconditional — every ready sub-task runs regardless of upstream outcome)
 - CI / remote execution
+- A2A / MCP protocol between agents (today each worker only sees its own prompt + any peer-repo read-only context)
 
 ## License
 
