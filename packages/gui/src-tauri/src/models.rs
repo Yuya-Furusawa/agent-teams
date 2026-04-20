@@ -26,6 +26,7 @@ pub struct SubTask {
     pub created_at: i64,
     pub completed_at: Option<i64>,
     pub target_repo: Option<String>,
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -42,7 +43,23 @@ pub struct TaskDetail {
 #[serde(rename_all = "camelCase")]
 pub enum ReportKind {
     Summary,
+    PlannerEvents,
     SubTask(String),
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskArtifacts {
+    pub summary_exists: bool,
+    pub planner_events_exists: bool,
+    pub triage_events_exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowGraph {
+    pub detail: TaskDetail,
+    pub artifacts: TaskArtifacts,
 }
 
 pub fn effective_status(task_status: &str, sub_tasks: &[SubTask]) -> String {
@@ -67,6 +84,7 @@ mod tests {
             created_at: 0,
             completed_at: None,
             target_repo: None,
+            depends_on: Vec::new(),
         }
     }
 

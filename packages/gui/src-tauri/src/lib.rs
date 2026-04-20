@@ -6,7 +6,7 @@ mod watcher;
 
 use crate::agents::AgentInfo;
 use crate::db::Db;
-use crate::models::{ReportKind, Task, TaskDetail};
+use crate::models::{ReportKind, Task, TaskDetail, WorkflowGraph};
 use crate::reports::Reports;
 use std::path::PathBuf;
 use tauri::State;
@@ -94,11 +94,26 @@ async fn get_report(
 ) -> Result<Option<String>, String> {
     match kind {
         ReportKind::Summary => state.reports.summary(&task_id).map_err(|e| e.to_string()),
+        ReportKind::PlannerEvents => state
+            .reports
+            .planner_events(&task_id)
+            .map_err(|e| e.to_string()),
         ReportKind::SubTask(sub) => state
             .reports
             .worker_report(&task_id, &sub)
             .map_err(|e| e.to_string()),
     }
+}
+
+#[tauri::command]
+async fn get_workflow(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Option<WorkflowGraph>, String> {
+    let detail = state.db.get_task_detail(&task_id).map_err(|e| e.to_string())?;
+    let Some(detail) = detail else { return Ok(None); };
+    let artifacts = state.reports.artifacts(&task_id);
+    Ok(Some(WorkflowGraph { detail, artifacts }))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -120,6 +135,7 @@ pub fn run() {
             list_tasks,
             get_task_detail,
             get_report,
+            get_workflow,
             list_agents,
             list_workspaces
         ])

@@ -26,6 +26,19 @@ impl Reports {
                 .join("report.md"),
         )
     }
+
+    pub fn planner_events(&self, task_id: &str) -> Result<Option<String>> {
+        read_capped(&self.root.join(task_id).join("planner-events.jsonl"))
+    }
+
+    pub fn artifacts(&self, task_id: &str) -> crate::models::TaskArtifacts {
+        let base = self.root.join(task_id);
+        crate::models::TaskArtifacts {
+            summary_exists: base.join("summary.md").exists(),
+            planner_events_exists: base.join("planner-events.jsonl").exists(),
+            triage_events_exists: base.join("triage-events.jsonl").exists(),
+        }
+    }
 }
 
 fn read_capped(path: &Path) -> Result<Option<String>> {
