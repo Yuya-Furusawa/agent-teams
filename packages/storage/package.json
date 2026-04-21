@@ -12,13 +12,15 @@
     }
   },
   "scripts": {
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "test": "vitest run"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
     "ulid": "^2.3.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11"
+    "@types/better-sqlite3": "^7.6.11",
+    "vitest": "^2.0.5"
   }
 }
