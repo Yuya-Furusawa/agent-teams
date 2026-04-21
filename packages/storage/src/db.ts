@@ -177,6 +177,13 @@ export class Storage {
       .run(status, completedAt ?? null, id);
   }
 
+  getSubTaskStatus(id: string): SubTaskStatus {
+    return this.db
+      .prepare(`SELECT status FROM sub_tasks WHERE id = ?`)
+      .pluck()
+      .get(id) as SubTaskStatus;
+  }
+
   insertAgentRun(row: Omit<AgentRunRow, "exit_code" | "completed_at"> & {
     exit_code?: number | null;
     completed_at?: number | null;

@@ -218,10 +218,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       title: e.plan.title,
       assignedAgent: e.plan.assignedAgent,
       role: roleOf(e.plan.assignedAgent),
-      status: storage.db
-        .prepare("SELECT status FROM sub_tasks WHERE id = ?")
-        .pluck()
-        .get(e.id) as string,
+      status: storage.getSubTaskStatus(e.id),
       report: readReport(taskId, e.id) ?? "",
       targetRepo: e.plan.targetRepo ?? null,
     }));
@@ -307,10 +304,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
               id: e.id,
               title: e.plan.title,
               assignedAgent: e.plan.assignedAgent,
-              status: storage.db
-                .prepare("SELECT status FROM sub_tasks WHERE id = ?")
-                .pluck()
-                .get(e.id) as string,
+              status: storage.getSubTaskStatus(e.id),
               targetRepo: e.plan.targetRepo ?? null,
               dependsOn: (e.plan.dependsOn ?? [])
                 .map((d) => round1PlanIdToUlid.get(d))
@@ -362,18 +356,19 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       ...round2Entries.map((e) => ({ entry: e, round: 2 as const })),
     ];
 
-    const subTaskReports = allEntries.map(({ entry, round }) => ({
-      title: entry.plan.title,
-      agent: entry.plan.assignedAgent,
-      ...(roleOf(entry.plan.assignedAgent) ? { role: roleOf(entry.plan.assignedAgent)! } : {}),
-      status: storage.db
-        .prepare("SELECT status FROM sub_tasks WHERE id = ?")
-        .pluck()
-        .get(entry.id) as string,
-      report: readReport(taskId, entry.id) ?? "",
-      targetRepo: entry.plan.targetRepo ?? null,
-      round,
-    }));
+    const subTaskReports = allEntries.map(({ entry, round }) => {
+      const role = roleOf(entry.plan.assignedAgent);
+      return {
+        id: entry.id,
+        title: entry.plan.title,
+        agent: entry.plan.assignedAgent,
+        ...(role ? { role } : {}),
+        status: storage.getSubTaskStatus(entry.id),
+        report: readReport(taskId, entry.id) ?? "",
+        targetRepo: entry.plan.targetRepo ?? null,
+        round,
+      };
+    });
 
     const summary = await runSummarizer({
       task: opts.description,
@@ -400,8 +395,8 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       status,
       workspace: ws?.name ?? null,
       repos: ws ? ws.repos : null,
-      subTasks: subTaskReports.map((r, i) => ({
-        id: allEntries[i]!.entry.id,
+      subTasks: subTaskReports.map((r) => ({
+        id: r.id,
         title: r.title,
         assignedAgent: r.agent,
         status: r.status,
