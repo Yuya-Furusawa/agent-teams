@@ -15,6 +15,7 @@ import {
   writeSummary,
   writeTaskSnapshot,
 } from "@agent-teams/storage";
+import type { InlineAgentDefinition } from "@agent-teams/agent-runner";
 import { join } from "node:path";
 import { ulid } from "ulid";
 import { loadAgentRegistry } from "./agent-registry.js";
@@ -24,8 +25,9 @@ import {
   resolveTeam,
   resolveWorkspaceTeam,
 } from "./instance.js";
-import { runPlanner, runSummarizer, runTriage } from "./planner-runner.js";
-import { loadTeam, validateTeamAgainstRegistry } from "./team.js";
+import { runPlanner, runRefixPlanner, runSummarizer, runTriage } from "./planner-runner.js";
+import type { SubTaskPlan } from "./planner-schema.js";
+import { loadTeam, validateTeamAgainstRegistry, type Team } from "./team.js";
 import { runWorker } from "./worker-runner.js";
 import {
   loadWorkspace,
@@ -33,6 +35,12 @@ import {
   type Repo,
   type Workspace,
 } from "./workspace.js";
+
+interface SubTaskEntry {
+  id: string;
+  index: number;
+  plan: SubTaskPlan;
+}
 
 const DEFAULT_MAX_PARALLEL = 3;
 
@@ -154,40 +162,13 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       await cmuxLog({ workspace, source: "agent-teams", message: `plan: ${plan.subTasks.length} sub-tasks — ${plan.subTasks.map((s) => s.assignedAgent).join(", ")}` });
     }
 
-    const subTasks = plan.subTasks.map((sub, idx) => ({
-      id: ulid(),
-      index: idx,
-      plan: sub,
-    }));
+    const maxParallel = team.defaults?.maxParallel ?? DEFAULT_MAX_PARALLEL;
 
-    // Map planner-local ids (from plan.subTasks[i].id) to orchestrator-generated ULIDs
-    // so dependsOn can be resolved against stored sub_task ids.
-    const planIdToUlid = new Map<string, string>();
-    for (const { id, plan: sub } of subTasks) planIdToUlid.set(sub.id, id);
-    const dependsOnUlids = (sub: typeof plan.subTasks[number]): string[] =>
-      (sub.dependsOn ?? []).map((d) => {
-        const resolved = planIdToUlid.get(d);
-        if (!resolved) {
-          throw new Error(`sub-task "${sub.id}" depends on unknown id "${d}"`);
-        }
-        return resolved;
-      });
+    // ===== Round 1 =====
+    const round1Entries = prepareRound({ storage, taskId, plan, round: 1 });
 
-    for (const { id, plan: sub } of subTasks) {
-      const deps = dependsOnUlids(sub);
-      storage.insertSubTask({
-        id,
-        task_id: taskId,
-        title: sub.title,
-        prompt: sub.prompt,
-        assigned_agent: sub.assignedAgent,
-        status: "pending",
-        created_at: Date.now(),
-        target_repo: sub.targetRepo ?? null,
-        depends_on: deps.length > 0 ? JSON.stringify(deps) : null,
-      });
-      initAgentDir(taskId, id);
-    }
+    const round1PlanIdToUlid = new Map<string, string>();
+    for (const e of round1Entries) round1PlanIdToUlid.set(e.plan.id, e.id);
 
     writeTaskSnapshot({
       id: taskId,
@@ -197,13 +178,16 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       status: "running",
       workspace: ws?.name ?? null,
       repos: ws ? ws.repos : null,
-      subTasks: subTasks.map(({ id, plan: sub }) => ({
-        id,
-        title: sub.title,
-        assignedAgent: sub.assignedAgent,
+      subTasks: round1Entries.map((e) => ({
+        id: e.id,
+        title: e.plan.title,
+        assignedAgent: e.plan.assignedAgent,
         status: "pending",
-        targetRepo: sub.targetRepo ?? null,
-        dependsOn: dependsOnUlids(sub),
+        targetRepo: e.plan.targetRepo ?? null,
+        dependsOn: (e.plan.dependsOn ?? [])
+          .map((d) => round1PlanIdToUlid.get(d))
+          .filter((x): x is string => Boolean(x)),
+        round: 1,
       })),
       createdAt: Date.now(),
       completedAt: null,
@@ -211,81 +195,184 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
 
     storage.updateTaskStatus(taskId, "running");
 
-    const maxParallel = team.defaults?.maxParallel ?? DEFAULT_MAX_PARALLEL;
-
     if (workspace) {
       await setStatus({ workspace, key: "agent-teams", value: "workers running…", icon: "figure.run" });
     }
 
-    let completed = 0;
-    const reportProgress = async () => {
-      if (!workspace) return;
-      await setStatus({
-        workspace,
-        key: "agent-teams",
-        value: `${completed}/${subTasks.length} done`,
-        icon: "hourglass",
-      });
-    };
+    await runRoundDag({
+      entries: round1Entries,
+      storage, taskId, ws, cwd, team, inlineAgents,
+      originalTaskDescription: opts.description,
+      maxParallel,
+      workspace,
+      round: 1,
+    });
 
-    const dagNodes = subTasks.map((entry) => ({
-      id: entry.id,
-      dependsOn: dependsOnUlids(entry.plan),
-      item: entry,
+    // ===== Refix planning =====
+    if (workspace) {
+      await setStatus({ workspace, key: "agent-teams", value: "refix planning…", icon: "arrow.clockwise" });
+    }
+
+    const round1ReportInputs = round1Entries.map((e) => ({
+      subTaskId: e.id,
+      title: e.plan.title,
+      assignedAgent: e.plan.assignedAgent,
+      role: roleOf(e.plan.assignedAgent),
+      status: storage.db
+        .prepare("SELECT status FROM sub_tasks WHERE id = ?")
+        .pluck()
+        .get(e.id) as string,
+      report: readReport(taskId, e.id) ?? "",
+      targetRepo: e.plan.targetRepo ?? null,
     }));
 
-    await runDag(dagNodes, maxParallel, async (entry) => {
-      const runId = ulid();
-      storage.insertAgentRun({
-        id: runId,
-        sub_task_id: entry.id,
-        pane_ref: null,
-        pid: null,
-        started_at: Date.now(),
-      });
-      storage.updateSubTaskStatus(entry.id, "running");
+    const originalPlanEntries = round1Entries.map((e) => ({
+      id: e.plan.id,
+      title: e.plan.title,
+      prompt: e.plan.prompt,
+      assignedAgent: e.plan.assignedAgent,
+      targetRepo: e.plan.targetRepo ?? null,
+    }));
 
-      const { workerCwd, targetRepo, peerRepos } = resolveWorkerScope(
-        ws,
-        entry.plan.targetRepo,
-        cwd,
-      );
-
-      try {
-        await runWorker({
-          taskId,
-          subTaskId: entry.id,
-          agent: entry.plan.assignedAgent,
-          originalTask: opts.description,
-          subTaskTitle: entry.plan.title,
-          subTaskPrompt: entry.plan.prompt,
-          ...(entry.plan.rationale ? { rationale: entry.plan.rationale } : {}),
-          cwd: workerCwd,
-          ...(team.defaults?.model ? { model: team.defaults.model } : {}),
-          inlineAgents,
-          ...(targetRepo ? { targetRepo } : {}),
-          ...(peerRepos && peerRepos.length > 0 ? { peerRepos } : {}),
-        });
-      } finally {
-        completed++;
-        await reportProgress().catch(() => {});
-      }
+    const roundOneHadReviewers = round1Entries.some((e) => {
+      const role = roleOf(e.plan.assignedAgent) ?? "";
+      return role.endsWith("-reviewer");
     });
+
+    let round2Entries: SubTaskEntry[] = [];
+    let refixSkipReason: string | undefined;
+
+    if (!roundOneHadReviewers) {
+      refixSkipReason = "Round 1 had no reviewers — refix phase skipped.";
+      if (workspace) {
+        await cmuxLog({ workspace, source: "agent-teams", message: refixSkipReason });
+      }
+    } else {
+      const allowedAssignees = [
+        ...new Set(round1Entries.map((e) => e.plan.assignedAgent)),
+      ];
+
+      const refixPlan = await runRefixPlanner({
+        task: opts.description,
+        cwd,
+        team,
+        plannerAgentName: plannerInstance.name,
+        round1Reports: round1ReportInputs,
+        originalPlan: originalPlanEntries,
+        allowedAssignees,
+        eventsPath: join(taskDir(taskId), "refix-planner-events.jsonl"),
+        inlineAgents,
+        ...(repos ? { repos } : {}),
+      });
+
+      if (refixPlan.subTasks.length === 0) {
+        refixSkipReason = refixPlan.overallStrategy;
+        if (workspace) {
+          await cmuxLog({
+            workspace,
+            source: "agent-teams",
+            message: `no refix needed: ${truncate(refixPlan.overallStrategy, 120)}`,
+          });
+        }
+      } else {
+        // Warn (fail open) if Sage reassigned to an agent not in round 1.
+        const round1Agents = new Set(round1Entries.map((e) => e.plan.assignedAgent));
+        for (const sub of refixPlan.subTasks) {
+          if (!round1Agents.has(sub.assignedAgent) && workspace) {
+            await cmuxLog({
+              workspace,
+              source: "agent-teams",
+              level: "warn",
+              message: `refix sub-task "${sub.title}" assigned to ${sub.assignedAgent} (not present in round 1)`,
+            });
+          }
+        }
+
+        // ===== Round 2 =====
+        round2Entries = prepareRound({ storage, taskId, plan: refixPlan, round: 2 });
+
+        const round2PlanIdToUlid = new Map<string, string>();
+        for (const e of round2Entries) round2PlanIdToUlid.set(e.plan.id, e.id);
+
+        writeTaskSnapshot({
+          id: taskId,
+          description: opts.description,
+          cwd,
+          team: team.name,
+          status: "running",
+          workspace: ws?.name ?? null,
+          repos: ws ? ws.repos : null,
+          subTasks: [
+            ...round1Entries.map((e) => ({
+              id: e.id,
+              title: e.plan.title,
+              assignedAgent: e.plan.assignedAgent,
+              status: storage.db
+                .prepare("SELECT status FROM sub_tasks WHERE id = ?")
+                .pluck()
+                .get(e.id) as string,
+              targetRepo: e.plan.targetRepo ?? null,
+              dependsOn: (e.plan.dependsOn ?? [])
+                .map((d) => round1PlanIdToUlid.get(d))
+                .filter((x): x is string => Boolean(x)),
+              round: 1 as const,
+            })),
+            ...round2Entries.map((e) => ({
+              id: e.id,
+              title: e.plan.title,
+              assignedAgent: e.plan.assignedAgent,
+              status: "pending" as const,
+              targetRepo: e.plan.targetRepo ?? null,
+              dependsOn: (e.plan.dependsOn ?? [])
+                .map((d) => round2PlanIdToUlid.get(d))
+                .filter((x): x is string => Boolean(x)),
+              round: 2 as const,
+            })),
+          ],
+          createdAt: Date.now(),
+          completedAt: null,
+        });
+
+        if (workspace) {
+          await setStatus({
+            workspace,
+            key: "agent-teams",
+            value: `refix 0/${round2Entries.length}`,
+            icon: "arrow.clockwise",
+          });
+        }
+
+        await runRoundDag({
+          entries: round2Entries,
+          storage, taskId, ws, cwd, team, inlineAgents,
+          originalTaskDescription: opts.description,
+          maxParallel,
+          workspace,
+          round: 2,
+        });
+      }
+    }
 
     if (workspace) {
       await setStatus({ workspace, key: "agent-teams", value: "summarizing…", icon: "sparkles" });
     }
 
-    const subTaskReports = subTasks.map(({ id, plan: sub }) => ({
-      title: sub.title,
-      agent: sub.assignedAgent,
-      ...(roleOf(sub.assignedAgent) ? { role: roleOf(sub.assignedAgent)! } : {}),
+    const allEntries: Array<{ entry: SubTaskEntry; round: 1 | 2 }> = [
+      ...round1Entries.map((e) => ({ entry: e, round: 1 as const })),
+      ...round2Entries.map((e) => ({ entry: e, round: 2 as const })),
+    ];
+
+    const subTaskReports = allEntries.map(({ entry, round }) => ({
+      title: entry.plan.title,
+      agent: entry.plan.assignedAgent,
+      ...(roleOf(entry.plan.assignedAgent) ? { role: roleOf(entry.plan.assignedAgent)! } : {}),
       status: storage.db
         .prepare("SELECT status FROM sub_tasks WHERE id = ?")
         .pluck()
-        .get(id) as string,
-      report: readReport(taskId, id) ?? "",
-      targetRepo: sub.targetRepo ?? null,
+        .get(entry.id) as string,
+      report: readReport(taskId, entry.id) ?? "",
+      targetRepo: entry.plan.targetRepo ?? null,
+      round,
     }));
 
     const summary = await runSummarizer({
@@ -296,6 +383,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       plannerAgentName: plannerInstance.name,
       eventsPath: join(taskDir(taskId), "summarizer-events.jsonl"),
       inlineAgents,
+      ...(refixSkipReason ? { refixSkipReason } : {}),
       ...(repos ? { repos } : {}),
     });
     writeSummary(taskId, summary.summary);
@@ -313,11 +401,12 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       workspace: ws?.name ?? null,
       repos: ws ? ws.repos : null,
       subTasks: subTaskReports.map((r, i) => ({
-        id: subTasks[i]!.id,
+        id: allEntries[i]!.entry.id,
         title: r.title,
         assignedAgent: r.agent,
         status: r.status,
         targetRepo: r.targetRepo ?? null,
+        round: r.round,
       })),
       createdAt: Date.now(),
       completedAt: Date.now(),
@@ -352,6 +441,115 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       }, 10_000).unref();
     }
   }
+}
+
+function prepareRound(params: {
+  storage: Storage;
+  taskId: string;
+  plan: { subTasks: SubTaskPlan[] };
+  round: 1 | 2;
+}): SubTaskEntry[] {
+  const entries: SubTaskEntry[] = params.plan.subTasks.map((sub, idx) => ({
+    id: ulid(),
+    index: idx,
+    plan: sub,
+  }));
+  const planIdToUlid = new Map<string, string>();
+  for (const { id, plan: sub } of entries) planIdToUlid.set(sub.id, id);
+  for (const { id, plan: sub } of entries) {
+    const deps = (sub.dependsOn ?? []).map((d) => {
+      const resolved = planIdToUlid.get(d);
+      if (!resolved) throw new Error(`sub-task "${sub.id}" depends on unknown id "${d}"`);
+      return resolved;
+    });
+    params.storage.insertSubTask({
+      id,
+      task_id: params.taskId,
+      title: sub.title,
+      prompt: sub.prompt,
+      assigned_agent: sub.assignedAgent,
+      status: "pending",
+      created_at: Date.now(),
+      target_repo: sub.targetRepo ?? null,
+      depends_on: deps.length > 0 ? JSON.stringify(deps) : null,
+      round: params.round,
+    });
+    initAgentDir(params.taskId, id);
+  }
+  return entries;
+}
+
+async function runRoundDag(params: {
+  entries: SubTaskEntry[];
+  storage: Storage;
+  taskId: string;
+  ws: Workspace | undefined;
+  cwd: string;
+  team: Team;
+  inlineAgents: Record<string, InlineAgentDefinition>;
+  originalTaskDescription: string;
+  maxParallel: number;
+  workspace: WorkspaceRef | null;
+  round: 1 | 2;
+}): Promise<void> {
+  const planIdToUlid = new Map<string, string>();
+  for (const e of params.entries) planIdToUlid.set(e.plan.id, e.id);
+  const dagNodes = params.entries.map((entry) => ({
+    id: entry.id,
+    dependsOn: (entry.plan.dependsOn ?? [])
+      .map((d) => planIdToUlid.get(d)!)
+      .filter((x) => x !== undefined),
+    item: entry,
+  }));
+
+  let completed = 0;
+  const total = params.entries.length;
+  const reportProgress = async () => {
+    if (!params.workspace) return;
+    const prefix = params.round === 2 ? "refix " : "";
+    await setStatus({
+      workspace: params.workspace,
+      key: "agent-teams",
+      value: `${prefix}${completed}/${total} done`,
+      icon: "hourglass",
+    });
+  };
+
+  await runDag(dagNodes, params.maxParallel, async (entry) => {
+    const runId = ulid();
+    params.storage.insertAgentRun({
+      id: runId,
+      sub_task_id: entry.id,
+      pane_ref: null,
+      pid: null,
+      started_at: Date.now(),
+    });
+    params.storage.updateSubTaskStatus(entry.id, "running");
+    const { workerCwd, targetRepo, peerRepos } = resolveWorkerScope(
+      params.ws,
+      entry.plan.targetRepo,
+      params.cwd,
+    );
+    try {
+      await runWorker({
+        taskId: params.taskId,
+        subTaskId: entry.id,
+        agent: entry.plan.assignedAgent,
+        originalTask: params.originalTaskDescription,
+        subTaskTitle: entry.plan.title,
+        subTaskPrompt: entry.plan.prompt,
+        ...(entry.plan.rationale ? { rationale: entry.plan.rationale } : {}),
+        cwd: workerCwd,
+        ...(params.team.defaults?.model ? { model: params.team.defaults.model } : {}),
+        inlineAgents: params.inlineAgents,
+        ...(targetRepo ? { targetRepo } : {}),
+        ...(peerRepos && peerRepos.length > 0 ? { peerRepos } : {}),
+      });
+    } finally {
+      completed++;
+      await reportProgress().catch(() => {});
+    }
+  });
 }
 
 async function finalizeWorkspaceStatus(
