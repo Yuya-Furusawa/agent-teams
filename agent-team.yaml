@@ -20,8 +20,12 @@ workers:
   - Mika    # test-first / TDD discipline
 
   # One of each of the other roles.
-  - Iris    # code reviewer
-  - Quinn   # QA engineer (unit / integration tests)
+  - Iris    # code reviewer (general correctness / fit)
+  - Haru    # maintainability reviewer
+  - Vale    # security reviewer
+  - Kiri    # simplicity / dead-code reviewer
+  - Tess    # test reviewer (strategy + test code quality)
+  - Quinn   # QA engineer (authors unit / integration tests)
   - Ren     # researcher
   - Nova    # browser / E2E operator
   - Juno    # systematic debugger
