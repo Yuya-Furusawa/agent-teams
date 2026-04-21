@@ -30,6 +30,8 @@ export interface SubTaskRow {
   target_repo: string | null;
   /** JSON-encoded array of sibling sub_task ids that must complete first. `null` = no dependencies. */
   depends_on: string | null;
+  /** 1 = initial plan, 2 = refix plan. Defaults to 1. */
+  round: number;
 }
 
 export interface AgentRunRow {
@@ -68,7 +70,8 @@ CREATE TABLE IF NOT EXISTS sub_tasks (
   created_at INTEGER NOT NULL,
   completed_at INTEGER,
   target_repo TEXT,
-  depends_on TEXT
+  depends_on TEXT,
+  round INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_sub_tasks_task_id ON sub_tasks(task_id);
@@ -113,6 +116,9 @@ export class Storage {
     if (!subColNames.has("depends_on")) {
       this.db.exec(`ALTER TABLE sub_tasks ADD COLUMN depends_on TEXT`);
     }
+    if (!subColNames.has("round")) {
+      this.db.exec(`ALTER TABLE sub_tasks ADD COLUMN round INTEGER NOT NULL DEFAULT 1`);
+    }
   }
 
   close(): void {
@@ -148,18 +154,19 @@ export class Storage {
   }
 
   insertSubTask(
-    row: Omit<SubTaskRow, "completed_at" | "target_repo" | "depends_on"> & {
+    row: Omit<SubTaskRow, "completed_at" | "target_repo" | "depends_on" | "round"> & {
       completed_at?: number | null;
       target_repo?: string | null;
       depends_on?: string | null;
+      round?: number;
     },
   ): void {
     this.db
       .prepare(
-        `INSERT INTO sub_tasks (id, task_id, title, prompt, assigned_agent, status, created_at, completed_at, target_repo, depends_on)
-         VALUES (@id, @task_id, @title, @prompt, @assigned_agent, @status, @created_at, @completed_at, @target_repo, @depends_on)`,
+        `INSERT INTO sub_tasks (id, task_id, title, prompt, assigned_agent, status, created_at, completed_at, target_repo, depends_on, round)
+         VALUES (@id, @task_id, @title, @prompt, @assigned_agent, @status, @created_at, @completed_at, @target_repo, @depends_on, @round)`,
       )
-      .run({ completed_at: null, target_repo: null, depends_on: null, ...row });
+      .run({ completed_at: null, target_repo: null, depends_on: null, round: 1, ...row });
   }
 
   updateSubTaskStatus(id: string, status: SubTaskStatus, completedAt?: number | null): void {
