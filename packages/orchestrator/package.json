@@ -12,7 +12,11 @@
     }
   },
   "scripts": {
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.5"
   },
   "dependencies": {
     "@agent-teams/agent-runner": "workspace:*",
