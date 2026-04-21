@@ -17,11 +17,11 @@ export const TriageSchema = z.object({
 export type Triage = z.infer<typeof TriageSchema>;
 
 export const SUB_TASK_COUNT_BY_DIFFICULTY: Record<Difficulty, string> = {
-  trivial: "exactly 1 sub-task",
-  small: "1–2 sub-tasks",
-  medium: "2–3 sub-tasks",
-  large: "3–5 sub-tasks",
-  xlarge: "5–7 sub-tasks",
+  trivial: "exactly 1 sub-task (reviewers usually not needed)",
+  small: "2–4 sub-tasks total (1–2 core + 1–2 reviewers)",
+  medium: "3–6 sub-tasks total (2–3 core + 2–3 reviewers)",
+  large: "5–9 sub-tasks total (3–5 core + 3–4 reviewers)",
+  xlarge: "8–12 sub-tasks total (5–7 core + 3–5 reviewers)",
 };
 
 export function buildTriagePrompt(opts: {
@@ -56,11 +56,30 @@ ${rosterText}
 - **large**: cross-module change or new subsystem. 1–4 hours.
 - **xlarge**: major feature needing research + design + impl + tests + docs.
 
-# Agent selection rules
-- Pick the **smallest set** that can do the job well.
-- Typical counts: trivial/small → 1–2 agents; medium → 2–4; large → 3–6; xlarge → up to 8.
-- Include an agent only if its charter clearly maps to work the task requires. Do not include "just in case" — the planner can only assign among the agents you select.
+# Agent selection rules (non-reviewers)
+- For everything except reviewers, pick the **smallest set** that can do the job well.
+- Typical core-agent counts: trivial/small → 1–2; medium → 2–3; large → 3–5; xlarge → up to 7.
+- Include a core agent only if its charter clearly maps to work the task requires. Do not include "just in case" — the planner can only assign among the agents you select.
 - If the task is UI-visible, include a browser / E2E agent. If it touches infra, include the DevOps agent. If there's a failing test or broken state, include a debugger. Otherwise leave them out.
+
+# Reviewer selection policy (diversity-first, override the "smallest set" rule)
+Reviewers run in parallel after the implementer(s) and are cheap to add (no coordination cost), so **select multiple reviewers with distinct lenses by default** whenever the task will modify executable code or configuration. The roster includes up to five reviewers:
+- **Iris** (general correctness / fit)
+- **Haru** (maintainability — readability, coupling, change surface)
+- **Vale** (security — inputs, auth, secrets, crypto, SSRF, deps)
+- **Kiri** (simplicity — dead code, redundancy, over-abstraction)
+- **Tess** (test review — coverage vs. behavior, assertion strength, flakiness)
+
+Rules:
+- **Vale is mandatory** for any task that touches executable code, configuration, dependency manifests, CI/CD, infra-as-code, auth/permission flows, request handling, data storage, crypto, or third-party integrations. The ONLY reason to omit Vale is that the task is unambiguously non-security — e.g. prose-only edits to README / docs / comments, screenshot updates, typo fixes in user-facing strings, changelog entries. If in doubt, include Vale.
+- **Include at least 2 reviewers total** whenever any implementer is selected. For medium+ tasks, aim for 3–4 diverse reviewers. Do not include all five unless the task genuinely spans all their concerns.
+- Pick reviewers whose lenses actually map to the change:
+  - Touches tests or asks for test coverage → always include **Tess**.
+  - Touches module boundaries, public APIs, or core modules → include **Haru**.
+  - Refactor / cleanup / removal task → include **Kiri** (often as the primary reviewer).
+  - Security-adjacent task (auth, crypto, parsing untrusted input, new dependencies) → **Vale** is required AND should be flagged prominently in the rationale.
+- For docs-only tasks: reviewers are usually skipped entirely (Lin alone is fine). Do not force Vale onto a pure prose change.
+- For trivial tasks: reviewers may be skipped. If a trivial task touches security-sensitive code, upgrade difficulty to "small" and include Vale.
 
 # Required output
 Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code block matching this schema (no prose after it):
@@ -114,7 +133,7 @@ export const TaskPlanSchema = z.object({
   overallStrategy: z
     .string()
     .describe("One-paragraph explanation of the decomposition approach"),
-  subTasks: z.array(SubTaskPlanSchema).min(1).max(8),
+  subTasks: z.array(SubTaskPlanSchema).min(1).max(12),
 });
 
 export type SubTaskPlan = z.infer<typeof SubTaskPlanSchema>;
@@ -145,7 +164,7 @@ export const PLAN_JSON_SCHEMA = {
     subTasks: {
       type: "array",
       minItems: 1,
-      maxItems: 8,
+      maxItems: 12,
       items: {
         type: "object",
         required: ["id", "title", "prompt", "assignedAgent"],
@@ -241,6 +260,12 @@ Schema:
 - If a sub-task consumes another's output (e.g. a code-reviewer reads an implementer's diff, a qa-engineer tests an implementation, a docs-writer documents a shipped feature), put the prerequisite sub-task ids in \`dependsOn\`.
 - Multiple reviewers of the same implementation SHARE the same \`dependsOn\` (they run in parallel after the implementation). Only chain reviewers when a later reviewer must see the earlier reviewer's feedback.
 - Never create cycles. Every id in \`dependsOn\` must reference another sub-task in this same plan.
+
+# Reviewer fan-out
+- If triage selected multiple reviewer agents (Iris / Haru / Vale / Kiri / Tess), give each its own sub-task. Do not merge reviewers — the whole point is that each applies a distinct lens.
+- All reviewer sub-tasks for the same implementation share the same \`dependsOn\` (the implementer's ids) so they run in parallel.
+- Security reviewer (**Vale**) is mandatory whenever any implementation / infra / dependency sub-task exists — include it even if the triage roster happens to omit it (in that rare case, still assign Vale; planner-assigned agents must be in the triage roster, so if Vale is missing, report this by selecting the closest available reviewer and noting the gap in \`rationale\`). Exception: docs-only / prose-only runs.
+- Each reviewer sub-task's \`prompt\` should be tailored to that reviewer's charter — do not copy-paste the same prompt across reviewers. Mention the specific files / behaviors to focus on from the implementation.
 
 Do not assign agents that are not in the roster. Do not wrap the JSON in any additional keys. Emit the block verbatim as your closing message.
 `.trim();
