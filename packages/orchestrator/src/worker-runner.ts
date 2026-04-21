@@ -7,20 +7,12 @@ import {
   writeReport,
   Storage,
 } from "@agent-teams/storage";
+import type { AgentRunnerFactory, AgentRunnerLike } from "./agent-runner-seam.js";
 import {
   buildWorkerAppendedSystemPrompt,
   buildWorkerPrompt,
   type PeerRepoInfo,
 } from "./worker-contract.js";
-
-interface AgentRunnerLike {
-  run(opts: Parameters<AgentRunner["run"]>[0]): Promise<{
-    exitCode: number | null;
-    parsedJson?: unknown;
-    lastText: string;
-  }>;
-}
-type AgentRunnerFactory = () => AgentRunnerLike;
 
 let agentRunnerFactory: AgentRunnerFactory = () => new AgentRunner();
 
@@ -28,6 +20,10 @@ export function __setAgentRunnerFactoryForTests(
   factory: AgentRunnerFactory | null,
 ): void {
   agentRunnerFactory = factory ?? (() => new AgentRunner());
+}
+
+function getAgentRunner(): AgentRunnerLike {
+  return agentRunnerFactory();
 }
 
 export interface WorkerRunParams {
@@ -61,7 +57,7 @@ export async function runWorker(params: WorkerRunParams): Promise<{
       rationale: params.rationale,
     });
 
-    const runner = agentRunnerFactory();
+    const runner = getAgentRunner();
     const result = await runner.run({
       agent: params.agent,
       prompt,

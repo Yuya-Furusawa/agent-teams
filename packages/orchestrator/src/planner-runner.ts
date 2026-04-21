@@ -1,6 +1,7 @@
 import { AgentRunner, type InlineAgentDefinition, type StreamJsonEvent } from "@agent-teams/agent-runner";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { AgentRunnerFactory, AgentRunnerLike } from "./agent-runner-seam.js";
 import {
   RefixPlanSchema,
   TaskPlanSchema,
@@ -19,21 +20,16 @@ import {
 } from "./planner-schema.js";
 import type { Team } from "./team.js";
 
-interface AgentRunnerLike {
-  run(opts: Parameters<AgentRunner["run"]>[0]): Promise<{
-    exitCode: number | null;
-    parsedJson?: unknown;
-    lastText: string;
-  }>;
-}
-type AgentRunnerFactory = () => AgentRunnerLike;
-
 let agentRunnerFactory: AgentRunnerFactory = () => new AgentRunner();
 
 export function __setAgentRunnerFactoryForTests(
   factory: AgentRunnerFactory | null,
 ): void {
   agentRunnerFactory = factory ?? (() => new AgentRunner());
+}
+
+function getAgentRunner(): AgentRunnerLike {
+  return agentRunnerFactory();
 }
 
 export function validatePlanDag(plan: TaskPlan): void {
@@ -127,7 +123,7 @@ export async function runTriage(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = agentRunnerFactory();
+  const runner = getAgentRunner();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
@@ -185,7 +181,7 @@ export async function runPlanner(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = agentRunnerFactory();
+  const runner = getAgentRunner();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
@@ -255,7 +251,7 @@ export async function runRefixPlanner(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = agentRunnerFactory();
+  const runner = getAgentRunner();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
@@ -331,7 +327,7 @@ export async function runSummarizer(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = agentRunnerFactory();
+  const runner = getAgentRunner();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
