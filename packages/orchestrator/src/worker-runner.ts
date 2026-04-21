@@ -13,6 +13,23 @@ import {
   type PeerRepoInfo,
 } from "./worker-contract.js";
 
+interface AgentRunnerLike {
+  run(opts: Parameters<AgentRunner["run"]>[0]): Promise<{
+    exitCode: number | null;
+    parsedJson?: unknown;
+    lastText: string;
+  }>;
+}
+type AgentRunnerFactory = () => AgentRunnerLike;
+
+let agentRunnerFactory: AgentRunnerFactory = () => new AgentRunner();
+
+export function __setAgentRunnerFactoryForTests(
+  factory: AgentRunnerFactory | null,
+): void {
+  agentRunnerFactory = factory ?? (() => new AgentRunner());
+}
+
 export interface WorkerRunParams {
   taskId: string;
   subTaskId: string;
@@ -44,7 +61,7 @@ export async function runWorker(params: WorkerRunParams): Promise<{
       rationale: params.rationale,
     });
 
-    const runner = new AgentRunner();
+    const runner = agentRunnerFactory();
     const result = await runner.run({
       agent: params.agent,
       prompt,

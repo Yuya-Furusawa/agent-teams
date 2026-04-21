@@ -19,6 +19,23 @@ import {
 } from "./planner-schema.js";
 import type { Team } from "./team.js";
 
+interface AgentRunnerLike {
+  run(opts: Parameters<AgentRunner["run"]>[0]): Promise<{
+    exitCode: number | null;
+    parsedJson?: unknown;
+    lastText: string;
+  }>;
+}
+type AgentRunnerFactory = () => AgentRunnerLike;
+
+let agentRunnerFactory: AgentRunnerFactory = () => new AgentRunner();
+
+export function __setAgentRunnerFactoryForTests(
+  factory: AgentRunnerFactory | null,
+): void {
+  agentRunnerFactory = factory ?? (() => new AgentRunner());
+}
+
 export function validatePlanDag(plan: TaskPlan): void {
   const ids = new Set<string>();
   for (const sub of plan.subTasks) {
@@ -110,7 +127,7 @@ export async function runTriage(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = new AgentRunner();
+  const runner = agentRunnerFactory();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
@@ -168,7 +185,7 @@ export async function runPlanner(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = new AgentRunner();
+  const runner = agentRunnerFactory();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
@@ -238,7 +255,7 @@ export async function runRefixPlanner(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = new AgentRunner();
+  const runner = agentRunnerFactory();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
@@ -314,7 +331,7 @@ export async function runSummarizer(opts: {
 
   const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
 
-  const runner = new AgentRunner();
+  const runner = agentRunnerFactory();
   const result = await runner.run({
     agent: opts.plannerAgentName,
     prompt,
