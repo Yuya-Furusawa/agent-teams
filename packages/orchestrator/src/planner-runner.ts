@@ -215,6 +215,75 @@ export async function runPlanner(opts: {
   return parsed;
 }
 
+export async function runRefixPlanner(opts: {
+  task: string;
+  cwd: string;
+  team: Team;
+  plannerAgentName: string;
+  round1Reports: Round1ReportInput[];
+  originalPlan: OriginalPlanEntry[];
+  allowedAssignees: string[];
+  eventsPath?: string;
+  inlineAgents?: Record<string, InlineAgentDefinition>;
+  onEvent?: (event: StreamJsonEvent) => void;
+  repos?: RepoInfo[];
+}): Promise<RefixPlan> {
+  const prompt = buildRefixPlannerPrompt({
+    task: opts.task,
+    cwd: opts.cwd,
+    round1Reports: opts.round1Reports,
+    originalPlan: opts.originalPlan,
+    ...(opts.repos ? { repos: opts.repos } : {}),
+  });
+
+  const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
+
+  const runner = new AgentRunner();
+  const result = await runner.run({
+    agent: opts.plannerAgentName,
+    prompt,
+    cwd: opts.cwd,
+    includeHookEvents: false,
+    permissionMode: "bypassPermissions",
+    model: opts.team.defaults?.model,
+    inlineAgents: opts.inlineAgents,
+    onEvent: (event) => {
+      fileLogger?.(event);
+      opts.onEvent?.(event);
+    },
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(`refix-planner exited with code ${result.exitCode}`);
+  }
+  if (!result.parsedJson) {
+    throw new Error(
+      `refix-planner did not produce a parseable JSON block.${opts.eventsPath ? ` raw events: ${opts.eventsPath}` : ""} last text excerpt: ${result.lastText.slice(0, 500)}`,
+    );
+  }
+
+  const parsed = RefixPlanSchema.parse(result.parsedJson);
+
+  // Empty plan = no refix needed; validate nothing further.
+  if (parsed.subTasks.length === 0) return parsed;
+
+  validatePlanRoster(parsed, opts.allowedAssignees);
+  validatePlanDag(parsed);
+
+  if (opts.repos && opts.repos.length > 0) {
+    const repoNames = new Set(opts.repos.map((r) => r.name));
+    for (const sub of parsed.subTasks) {
+      if (sub.targetRepo && !repoNames.has(sub.targetRepo)) {
+        throw new Error(
+          `refix-planner assigned unknown targetRepo "${sub.targetRepo}" for sub-task "${sub.title}". Expected one of: ${[...repoNames].join(", ")}`,
+        );
+      }
+    }
+  }
+
+  return parsed;
+}
+
 export async function runSummarizer(opts: {
   task: string;
   cwd: string;
@@ -227,7 +296,9 @@ export async function runSummarizer(opts: {
     status: string;
     report: string;
     targetRepo?: string | null;
+    round?: number;
   }>;
+  refixSkipReason?: string;
   eventsPath?: string;
   inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
@@ -237,6 +308,7 @@ export async function runSummarizer(opts: {
     task: opts.task,
     cwd: opts.cwd,
     subTaskReports: opts.subTaskReports,
+    ...(opts.refixSkipReason ? { refixSkipReason: opts.refixSkipReason } : {}),
     ...(opts.repos ? { repos: opts.repos } : {}),
   });
 
