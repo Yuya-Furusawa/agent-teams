@@ -27,6 +27,7 @@ pub struct SubTask {
     pub completed_at: Option<i64>,
     pub target_repo: Option<String>,
     pub depends_on: Vec<String>,
+    pub round: u32,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -85,6 +86,7 @@ mod tests {
             completed_at: None,
             target_repo: None,
             depends_on: Vec::new(),
+            round: 1,
         }
     }
 

@@ -103,7 +103,7 @@ impl Db {
         let Some(task) = task else { return Ok(None); };
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, task_id, title, assigned_agent, status, created_at, completed_at, target_repo, depends_on
+            SELECT id, task_id, title, assigned_agent, status, created_at, completed_at, target_repo, depends_on, round
             FROM sub_tasks
             WHERE task_id = ?1
             ORDER BY created_at ASC
@@ -126,6 +126,7 @@ impl Db {
                     completed_at: r.get(6)?,
                     target_repo: r.get(7)?,
                     depends_on,
+                    round: r.get::<_, i64>(9)? as u32,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -150,12 +151,13 @@ mod tests {
               workspace_name TEXT, repos TEXT);
             CREATE TABLE sub_tasks (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, title TEXT NOT NULL,
               prompt TEXT NOT NULL, assigned_agent TEXT NOT NULL, status TEXT NOT NULL,
-              created_at INTEGER NOT NULL, completed_at INTEGER, target_repo TEXT, depends_on TEXT);
+              created_at INTEGER NOT NULL, completed_at INTEGER, target_repo TEXT, depends_on TEXT,
+              round INTEGER NOT NULL DEFAULT 1);
             INSERT INTO tasks VALUES ('t1', 'desc one', '/w', 'default', 'completed', 1000, 2000, NULL, NULL);
             INSERT INTO tasks VALUES ('t2', 'desc two', '/w', 'default', 'running',   3000, NULL, 'my-app', '[]');
-            INSERT INTO sub_tasks VALUES ('s1a', 't1', 'one', '', 'Lin', 'completed', 1000, 1500, NULL, NULL);
-            INSERT INTO sub_tasks VALUES ('s1b', 't1', 'two', '', 'Kai', 'failed',    1100, 1600, NULL, '["s1a"]');
-            INSERT INTO sub_tasks VALUES ('s2a', 't2', 'a',   '', 'Kai', 'running',   3100, NULL, 'backend', NULL);
+            INSERT INTO sub_tasks VALUES ('s1a', 't1', 'one', '', 'Lin', 'completed', 1000, 1500, NULL, NULL, 1);
+            INSERT INTO sub_tasks VALUES ('s1b', 't1', 'two', '', 'Kai', 'failed',    1100, 1600, NULL, '["s1a"]', 1);
+            INSERT INTO sub_tasks VALUES ('s2a', 't2', 'a',   '', 'Kai', 'running',   3100, NULL, 'backend', NULL, 1);
             "#,
         )
         .unwrap();
