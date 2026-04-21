@@ -24,6 +24,7 @@ export interface TaskSnapshot {
     status: string;
     targetRepo?: string | null;
     dependsOn?: string[];
+    round?: number;
   }>;
   createdAt: number;
   completedAt: number | null;
