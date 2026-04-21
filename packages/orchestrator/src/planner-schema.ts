@@ -139,6 +139,20 @@ export const TaskPlanSchema = z.object({
 export type SubTaskPlan = z.infer<typeof SubTaskPlanSchema>;
 export type TaskPlan = z.infer<typeof TaskPlanSchema>;
 
+/**
+ * Refix plan. Like TaskPlanSchema but allows an empty subTasks array — Sage
+ * returns an empty plan when round 1 produced no in-scope findings.
+ * overallStrategy remains required so the reason-for-skip flows to summary.
+ */
+export const RefixPlanSchema = z.object({
+  overallStrategy: z
+    .string()
+    .min(1)
+    .describe("One paragraph: either the refix strategy, or why refix is unnecessary"),
+  subTasks: z.array(SubTaskPlanSchema).min(0).max(12),
+});
+export type RefixPlan = z.infer<typeof RefixPlanSchema>;
+
 export const SUMMARY_SCHEMA = {
   type: "object",
   required: ["summary"],
@@ -178,6 +192,20 @@ export const PLAN_JSON_SCHEMA = {
           dependsOn: { type: "array", items: { type: "string" } },
         },
       },
+    },
+  },
+} as const;
+
+export const REFIX_PLAN_JSON_SCHEMA = {
+  type: "object",
+  required: ["overallStrategy", "subTasks"],
+  properties: {
+    overallStrategy: { type: "string" },
+    subTasks: {
+      type: "array",
+      minItems: 0,
+      maxItems: 12,
+      items: PLAN_JSON_SCHEMA.properties.subTasks.items,
     },
   },
 } as const;
@@ -271,6 +299,137 @@ Do not assign agents that are not in the roster. Do not wrap the JSON in any add
 `.trim();
 }
 
+export interface Round1ReportInput {
+  subTaskId: string;
+  title: string;
+  assignedAgent: string;
+  role?: string;
+  status: string;
+  report: string;
+  targetRepo?: string | null;
+}
+
+export interface OriginalPlanEntry {
+  id: string;
+  title: string;
+  prompt: string;
+  assignedAgent: string;
+  targetRepo?: string | null;
+}
+
+export function buildRefixPlannerPrompt(opts: {
+  task: string;
+  cwd: string;
+  round1Reports: Round1ReportInput[];
+  originalPlan: OriginalPlanEntry[];
+  repos?: RepoInfo[];
+}): string {
+  const reportSections = opts.round1Reports
+    .map(
+      (r, i) => `
+## Round 1 sub-task ${i + 1}: ${r.title}
+- id: ${r.subTaskId}
+- agent: ${r.role ? `${r.assignedAgent} (role: ${r.role})` : r.assignedAgent}
+- status: ${r.status}${r.targetRepo ? `\n- targetRepo: ${r.targetRepo}` : ""}
+
+### Report
+${r.report || "(no report captured)"}
+`.trim(),
+    )
+    .join("\n\n");
+
+  const implementerMap = opts.originalPlan
+    .map((p) => `- ${p.id} → ${p.assignedAgent}${p.targetRepo ? ` (${p.targetRepo})` : ""}: ${p.title}`)
+    .join("\n");
+
+  const reposBlock = reposSection(opts.repos);
+  const schemaTargetRepoField = opts.repos && opts.repos.length > 0
+    ? `,\n      "targetRepo": "string (repo name; inherit from the original implementer's sub-task)"`
+    : "";
+
+  return `
+You are the planner for a team of coding agents, operating in **refix-planning mode**. The round-1 DAG (implementers + reviewers) has completed. Decide whether a refix round is needed and, if so, emit the refix sub-tasks.
+
+# Scope rules
+- In-scope for refix: every must-fix finding (all reviewers), plus every nice-to-fix finding raised by Vale (security).
+- Out-of-scope: nit, nice-to-fix from non-Vale reviewers.
+- If Vale is not present in round 1 reports, the Vale escalation rule is a no-op (treat scope as must-fix only).
+- If no in-scope findings exist, emit an empty \`subTasks\` array. You MUST still provide a non-empty \`overallStrategy\` explaining why refix is unnecessary.
+
+# Assignment rules
+- Each refix sub-task's \`assignedAgent\` MUST equal the ORIGINAL implementer's name (see mapping below). Do not reassign to a different implementer.
+- Group all in-scope findings targeting the same implementer into a single refix sub-task.
+- Each refix sub-task inherits the \`targetRepo\` of the original implementer's sub-task (relevant in workspace mode).
+- For each reviewer who raised in-scope findings, emit exactly ONE re-review sub-task. If that reviewer had findings against multiple implementers, the re-review sub-task's \`dependsOn\` lists ALL corresponding refix sub-task ids — a single reviewer session re-checks all related refixes.
+- Re-review prompts MUST state explicitly: any new must-fix findings raised in round 2 will be deferred to the summary, not fixed in this run.
+
+# User task
+${opts.task}
+
+# Working directory
+${opts.cwd}${reposBlock}
+
+# Original implementer → sub-task mapping
+${implementerMap}
+
+# Round 1 reports
+${reportSections}
+
+# Required output
+Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code block matching this schema:
+
+\`\`\`json
+{
+  "overallStrategy": "string (refix plan or the reason refix is unnecessary)",
+  "subTasks": [
+    {
+      "id": "string (slug unique within this refix plan; referenced by dependsOn)",
+      "title": "string",
+      "prompt": "string (self-contained; include the original report path, the specific findings to address, and the 'no further refix in round 2' note for re-reviewers)",
+      "assignedAgent": "string (original implementer's name for refix; reviewer's name for re-review)",
+      "rationale": "string (optional)",
+      "dependsOn": ["string (re-review sub-tasks list their refix sub-task ids here)"]${schemaTargetRepoField}
+    }
+  ]
+}
+\`\`\`
+
+Emit the JSON block verbatim as your closing message. No prose after the block.
+`.trim();
+}
+
+export interface ReviewFinding {
+  reviewer: string;
+  severity: "must-fix" | "nice-to-fix";
+  body: string;
+}
+
+export function buildRefixWorkerPrompt(opts: {
+  originalReportPath: string;
+  findings: ReviewFinding[];
+  targetRepo?: string;
+}): string {
+  const grouped = opts.findings.map(
+    (f) => `- [${f.severity}] ${f.reviewer}: ${f.body}`,
+  );
+  return `
+# Refix assignment
+
+Your previous work on this sub-task was reviewed. Address the findings below in the same files you modified before.
+
+Original report (for your reference): ${opts.originalReportPath}${opts.targetRepo ? `\nTarget repo: ${opts.targetRepo}` : ""}
+
+## Findings to address (in-scope)
+${grouped.join("\n")}
+
+## Rules
+- Fix every must-fix finding. Fix every nice-to-fix finding raised by Vale (security).
+- Do NOT introduce unrelated changes. Scope is strictly the findings above.
+- A re-review will follow this sub-task; it will verify each finding is addressed.
+- If a finding is ambiguous or you cannot reproduce it, document your decision in the report under \`## 申し送り / ブロッカー\`.
+`.trim();
+}
+
 export function buildSummaryPrompt(opts: {
   task: string;
   cwd: string;
@@ -281,22 +440,28 @@ export function buildSummaryPrompt(opts: {
     status: string;
     report: string;
     targetRepo?: string | null;
+    round?: number;
   }>;
+  refixSkipReason?: string;
   repos?: RepoInfo[];
 }): string {
   const sections = opts.subTaskReports
-    .map(
-      (r, i) => `
-## Sub-task ${i + 1}: ${r.title}
+    .map((r, i) => {
+      const roundTag = r.round ? ` [round ${r.round}]` : "";
+      return `
+## Sub-task ${i + 1}${roundTag}: ${r.title}
 - Agent: ${r.role ? `${r.agent} (role: ${r.role})` : r.agent}${r.targetRepo ? `\n- Repo: ${r.targetRepo}` : ""}
 - Status: ${r.status}
 
 ### Report
 ${r.report || "(no report captured)"}
-`.trim(),
-    )
+`.trim();
+    })
     .join("\n\n");
   const reposBlock = reposSection(opts.repos);
+  const refixSkipBlock = opts.refixSkipReason
+    ? `\n\n# Refix phase\nRefix was skipped. Sage's reason: ${opts.refixSkipReason}`
+    : "";
 
   return `
 You are the summarizer for a coding-agent team. Produce a concise, faithful markdown summary of the team run based on each agent's report.
@@ -311,11 +476,13 @@ You are the summarizer for a coding-agent team. Produce a concise, faithful mark
 \`\`\`
 If an agent omitted the つぶやき section, skip that agent silently — do not fabricate quotes. Preserve the agent's wording verbatim (do not paraphrase or translate).
 
+**Rounds**: Sub-tasks are tagged \`[round 1]\` (initial plan) or \`[round 2]\` (refix + re-review). In the \`## 実施内容\` and \`## 申し送り / リスク\` sections, when both rounds exist, describe round 1 first, then the refix round separately so the reader can trace what was fixed. If the refix phase was skipped entirely, note the reason in \`## 概要\`.
+
 # Original user task
 ${opts.task}
 
 # Working directory
-${opts.cwd}${reposBlock}
+${opts.cwd}${reposBlock}${refixSkipBlock}
 
 # Per-agent reports
 ${sections}
