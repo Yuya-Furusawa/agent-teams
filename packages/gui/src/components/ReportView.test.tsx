@@ -17,4 +17,19 @@ describe("ReportView", () => {
     render(<ReportView body={null} loading={true} missingLabel="No report yet" />);
     expect(screen.getByText("Loading…")).toBeTruthy();
   });
+
+  it("lifts つぶやき out of the markdown and renders it as a banner", () => {
+    const md = [
+      "# headline",
+      "",
+      "## つぶやき",
+      "「テスト先に書いたら勝ち確。」",
+      "",
+      "— Mika",
+    ].join("\n");
+    render(<ReportView body={md} loading={false} missingLabel="x" />);
+    expect(screen.getByText("つぶやき")).toBeTruthy();
+    expect(screen.getByText("「テスト先に書いたら勝ち確。」")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "つぶやき" })).toBeNull();
+  });
 });
