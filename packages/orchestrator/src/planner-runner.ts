@@ -2,13 +2,18 @@ import { AgentRunner, type InlineAgentDefinition, type StreamJsonEvent } from "@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  RefixPlanSchema,
   TaskPlanSchema,
   TriageSchema,
   buildPlannerPrompt,
+  buildRefixPlannerPrompt,
   buildSummaryPrompt,
   buildTriagePrompt,
   type Difficulty,
+  type OriginalPlanEntry,
+  type RefixPlan,
   type RepoInfo,
+  type Round1ReportInput,
   type TaskPlan,
   type Triage,
 } from "./planner-schema.js";
@@ -53,6 +58,23 @@ export function validatePlanDag(plan: TaskPlan): void {
       .filter(([, d]) => d.size > 0)
       .map(([id]) => id);
     throw new Error(`plan has a dependency cycle involving: ${stuck.join(", ")}`);
+  }
+}
+/**
+ * Ensures every sub-task's assignedAgent is a name in the provided roster.
+ * Shared between the initial planner and the refix planner.
+ */
+export function validatePlanRoster(
+  plan: { subTasks: Array<{ assignedAgent: string }> },
+  rosterNames: Iterable<string>,
+): void {
+  const allowed = new Set(rosterNames);
+  for (const sub of plan.subTasks) {
+    if (!allowed.has(sub.assignedAgent)) {
+      throw new Error(
+        `planner assigned agent "${sub.assignedAgent}" which is not in the roster: ${[...allowed].join(", ")}`,
+      );
+    }
   }
 }
 import type { Team } from "./team.js";
@@ -171,14 +193,7 @@ export async function runPlanner(opts: {
   }
   const parsed = TaskPlanSchema.parse(result.parsedJson);
 
-  const allowed = new Set(opts.workers.map((w) => w.name));
-  for (const sub of parsed.subTasks) {
-    if (!allowed.has(sub.assignedAgent)) {
-      throw new Error(
-        `planner assigned agent "${sub.assignedAgent}" which is not in the roster: ${[...allowed].join(", ")}`,
-      );
-    }
-  }
+  validatePlanRoster(parsed, opts.workers.map((w) => w.name));
 
   validatePlanDag(parsed);
 
