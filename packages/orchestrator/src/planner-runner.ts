@@ -17,6 +17,7 @@ import {
   type TaskPlan,
   type Triage,
 } from "./planner-schema.js";
+import type { Team } from "./team.js";
 
 export function validatePlanDag(plan: TaskPlan): void {
   const ids = new Set<string>();
@@ -77,7 +78,6 @@ export function validatePlanRoster(
     }
   }
 }
-import type { Team } from "./team.js";
 
 function eventLogger(path: string): (event: StreamJsonEvent) => void {
   mkdirSync(dirname(path), { recursive: true });
