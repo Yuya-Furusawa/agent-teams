@@ -24,6 +24,7 @@ function mkSub(
     completedAt: null,
     targetRepo: null,
     dependsOn,
+    round: 1,
   };
 }
 

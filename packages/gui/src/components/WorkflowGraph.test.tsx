@@ -28,6 +28,7 @@ function mkGraph(subs: { id: string; status: "pending" | "running" | "completed"
         completedAt: null,
         targetRepo: null,
         dependsOn: [],
+        round: 1,
       })),
       effectiveStatus: "running",
     },

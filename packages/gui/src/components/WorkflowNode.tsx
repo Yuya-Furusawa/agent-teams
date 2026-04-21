@@ -50,11 +50,18 @@ export function WorkflowNode({
       <div className="text-xs text-neutral-400 truncate">{stage.label}</div>
       <div className="flex items-center justify-between gap-2 mt-0.5">
         <StatusBadge status={stage.status} />
-        {stage.targetRepo && (
-          <span className="text-[10px] px-1 py-0.5 rounded bg-neutral-700 text-neutral-200 truncate max-w-[50%]">
-            {stage.targetRepo}
-          </span>
-        )}
+        <div className="flex items-center gap-1 min-w-0">
+          {stage.round === 2 && (
+            <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] uppercase font-medium">
+              refix
+            </span>
+          )}
+          {stage.targetRepo && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-neutral-700 text-neutral-200 truncate max-w-[50%]">
+              {stage.targetRepo}
+            </span>
+          )}
+        </div>
       </div>
     </button>
   );

@@ -53,6 +53,7 @@ export function deriveWorkflow(
       role: agentRoles?.[s.assignedAgent],
       targetRepo: s.targetRepo,
       dependsOn: s.dependsOn,
+      round: s.round,
     });
   }
 

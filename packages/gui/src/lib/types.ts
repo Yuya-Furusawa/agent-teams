@@ -25,6 +25,7 @@ export interface SubTask {
   completedAt: number | null;
   targetRepo: string | null;
   dependsOn: string[];
+  round: number;
 }
 
 export interface TaskDetail {
@@ -50,6 +51,8 @@ export interface WorkflowStage {
   targetRepo?: string | null;
   /** Sub-task ids this worker depends on (empty for layer 0 / planning / summary). */
   dependsOn?: string[];
+  /** Refix round (1 = initial, 2 = refix). Only present for worker stages. */
+  round?: number;
 }
 
 export interface TaskArtifacts {
