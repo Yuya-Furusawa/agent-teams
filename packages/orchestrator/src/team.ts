@@ -3,6 +3,13 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { AgentRegistry } from "./agent-registry.js";
 
+export const PbiConfigSchema = z.object({
+  vault: z.string().min(1),
+  dir: z.string().default("PBIs"),
+});
+
+export type PbiConfig = z.infer<typeof PbiConfigSchema>;
+
 export const TeamSchema = z.object({
   name: z.string().min(1),
   planner: z.string().min(1),
@@ -13,6 +20,7 @@ export const TeamSchema = z.object({
       maxParallel: z.number().int().positive().optional(),
     })
     .optional(),
+  pbi: PbiConfigSchema.optional(),
 });
 
 export type Team = z.infer<typeof TeamSchema>;

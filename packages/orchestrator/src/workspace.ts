@@ -3,6 +3,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { workspaceFile, workspacesDir } from "@agent-teams/storage";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { PbiConfigSchema } from "./team.js";
 
 export const RepoSchema = z.object({
   name: z.string().min(1),
@@ -14,6 +15,7 @@ export type Repo = z.infer<typeof RepoSchema>;
 export const WorkspaceSchema = z.object({
   name: z.string().min(1),
   repos: z.array(RepoSchema).min(1),
+  pbi: PbiConfigSchema.optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
