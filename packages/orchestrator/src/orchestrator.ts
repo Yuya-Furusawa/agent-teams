@@ -27,6 +27,9 @@ import {
 } from "./instance.js";
 import { runPlanner, runRefixPlanner, runSummarizer, runTriage } from "./planner-runner.js";
 import type { SubTaskPlan } from "./planner-schema.js";
+import { loadPbiConfig } from "./pbi-config.js";
+import { buildPbiTaskDescription, parsePbiNumber } from "./pbi-input.js";
+import { resolvePbiPath } from "./pbi-numbering.js";
 import { loadTeam, validateTeamAgainstRegistry, type Team } from "./team.js";
 import { runWorker } from "./worker-runner.js";
 import {
@@ -35,6 +38,7 @@ import {
   type Repo,
   type Workspace,
 } from "./workspace.js";
+import { readFileSync } from "node:fs";
 
 export interface SubTaskEntry {
   id: string;
@@ -63,6 +67,8 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   let ws: Workspace | undefined;
   let team;
   let cwd: string;
+  let description = opts.description;
+  let inputKind: "freeform" | "pbi" = "freeform";
 
   if (opts.workspace) {
     ws = loadWorkspace(opts.workspace);
@@ -74,6 +80,16 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
     cwd = opts.cwd ?? process.cwd();
     const teamPath = opts.teamPath ?? `${cwd}/agent-team.yaml`;
     team = loadTeam(teamPath);
+  }
+
+  // ===== PBI 番号入力の解決 =====
+  const pbiNum = parsePbiNumber(description);
+  if (pbiNum !== null) {
+    const pbiCfg = loadPbiConfig(ws ? { workspace: ws } : { cwd });
+    const path = resolvePbiPath(pbiCfg, pbiNum);
+    const md = readFileSync(path, "utf8");
+    description = buildPbiTaskDescription(pbiNum, md);
+    inputKind = "pbi";
   }
 
   validateTeamAgainstRegistry(team, registry);
@@ -92,7 +108,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
 
   storage.insertTask({
     id: taskId,
-    description: opts.description,
+    description,
     cwd,
     team_name: team.name,
     status: "planning",
@@ -106,7 +122,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   try {
     if (workspace) {
       await setStatus({ workspace, key: "agent-teams", value: "triaging…", icon: "questionmark.circle" });
-      await cmuxLog({ workspace, source: "agent-teams", message: `task ${taskId}: ${truncate(opts.description, 120)}` });
+      await cmuxLog({ workspace, source: "agent-teams", message: `task ${taskId}: ${truncate(description, 120)}` });
     }
 
     const fullRoster = workerInstances.map((i) => ({
@@ -115,18 +131,39 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       description: i.description,
     }));
 
-    const triage = await runTriage({
-      task: opts.description,
-      cwd,
-      team,
-      plannerAgentName: plannerInstance.name,
-      roster: fullRoster,
-      eventsPath: join(taskDir(taskId), "triage-events.jsonl"),
-      inlineAgents,
-      ...(repos ? { repos } : {}),
-    });
+    let triageOutput: {
+      difficulty: "trivial" | "small" | "medium" | "large" | "xlarge";
+      selectedAgents: string[];
+      rationale?: string;
+    };
 
-    const selectedSet = new Set(triage.selectedAgents);
+    if (inputKind === "pbi") {
+      // PBI 入力: triage をバイパス。フルロスター + difficulty 固定。
+      triageOutput = {
+        difficulty: "medium",
+        selectedAgents: workerInstances.map((i) => i.name),
+      };
+      if (workspace) {
+        await cmuxLog({
+          workspace,
+          source: "agent-teams",
+          message: `pbi input: triage bypassed, full roster (${triageOutput.selectedAgents.length} agents)`,
+        });
+      }
+    } else {
+      triageOutput = await runTriage({
+        task: description,
+        cwd,
+        team,
+        plannerAgentName: plannerInstance.name,
+        roster: fullRoster,
+        eventsPath: join(taskDir(taskId), "triage-events.jsonl"),
+        inlineAgents,
+        ...(repos ? { repos } : {}),
+      });
+    }
+
+    const selectedSet = new Set(triageOutput.selectedAgents);
     const selectedInstances = workerInstances.filter((i) => selectedSet.has(i.name));
     if (selectedInstances.length === 0) {
       throw new Error(`triage selected no agents (roster: ${workerInstances.map((i) => i.name).join(", ")})`);
@@ -136,13 +173,13 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       await cmuxLog({
         workspace,
         source: "agent-teams",
-        message: `triage: ${triage.difficulty} — picked ${triage.selectedAgents.join(", ")}`,
+        message: `triage: ${triageOutput.difficulty} — picked ${triageOutput.selectedAgents.join(", ")}`,
       });
-      await setStatus({ workspace, key: "agent-teams", value: `planning (${triage.difficulty})…`, icon: "circle.dotted" });
+      await setStatus({ workspace, key: "agent-teams", value: `planning (${triageOutput.difficulty})…`, icon: "circle.dotted" });
     }
 
     const plan = await runPlanner({
-      task: opts.description,
+      task: description,
       cwd,
       team,
       plannerAgentName: plannerInstance.name,
@@ -151,8 +188,8 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
         role: i.role,
         description: i.description,
       })),
-      difficulty: triage.difficulty,
-      ...(triage.rationale ? { triageRationale: triage.rationale } : {}),
+      difficulty: triageOutput.difficulty,
+      ...(triageOutput.rationale ? { triageRationale: triageOutput.rationale } : {}),
       eventsPath: join(taskDir(taskId), "planner-events.jsonl"),
       inlineAgents,
       ...(repos ? { repos } : {}),
@@ -172,7 +209,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
 
     writeTaskSnapshot({
       id: taskId,
-      description: opts.description,
+      description,
       cwd,
       team: team.name,
       status: "running",
@@ -202,7 +239,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
     await runRoundDag({
       entries: round1Entries,
       storage, taskId, ws, cwd, team, inlineAgents,
-      originalTaskDescription: opts.description,
+      originalTaskDescription: description,
       maxParallel,
       workspace,
       round: 1,
@@ -250,7 +287,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       ];
 
       const refixPlan = await runRefixPlanner({
-        task: opts.description,
+        task: description,
         cwd,
         team,
         plannerAgentName: plannerInstance.name,
@@ -293,7 +330,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
 
         writeTaskSnapshot({
           id: taskId,
-          description: opts.description,
+          description,
           cwd,
           team: team.name,
           status: "running",
@@ -339,7 +376,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
         await runRoundDag({
           entries: round2Entries,
           storage, taskId, ws, cwd, team, inlineAgents,
-          originalTaskDescription: opts.description,
+          originalTaskDescription: description,
           maxParallel,
           workspace,
           round: 2,
@@ -371,7 +408,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
     });
 
     const summary = await runSummarizer({
-      task: opts.description,
+      task: description,
       cwd,
       team,
       subTaskReports,
@@ -389,7 +426,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
 
     writeTaskSnapshot({
       id: taskId,
-      description: opts.description,
+      description,
       cwd,
       team: team.name,
       status,

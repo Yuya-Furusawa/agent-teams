@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "./orchestrator.js";
+import { parsePbiNumber } from "./pbi-input.js";
 import {
   __setAgentRunnerFactoryForTests as setPlannerFactory,
 } from "./planner-runner.js";
@@ -196,5 +197,47 @@ describe("runTask with refix phase", () => {
     await runTask({ description: "trivial", cwd: tmp });
     expect(refixSpy).not.toHaveBeenCalled();
     expect(workerRuns).toEqual(["Kai"]);
+  });
+});
+
+describe("runTask PBI number resolution", () => {
+  it("parsePbiNumber detects '42' as a PBI lookup", () => {
+    expect(parsePbiNumber("42")).toBe(42);
+  });
+
+  it("throws clearly when PBI number is given but pbi.vault not configured", async () => {
+    const prev = process.env.AGENT_TEAMS_OBSIDIAN_VAULT;
+    delete process.env.AGENT_TEAMS_OBSIDIAN_VAULT;
+    const tmp = mkdtempSync(join(tmpdir(), "no-pbi-cfg-"));
+    writeFileSync(
+      join(tmp, "agent-team.yaml"),
+      `name: test\nplanner: Sage\nworkers:\n  - Kai\n`,
+    );
+    const agentsDir = join(tmp, "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(agentsDir, "Sage.md"),
+      `---\nname: Sage\nrole: team-planner\n---\nPlanner body.`,
+    );
+    writeFileSync(
+      join(agentsDir, "Kai.md"),
+      `---\nname: Kai\nrole: implementer\n---\nKai body.`,
+    );
+    const prevHome = process.env.AGENT_TEAMS_HOME;
+    const prevAgentsDir = process.env.AGENT_TEAMS_AGENTS_DIR;
+    process.env.AGENT_TEAMS_HOME = join(tmp, "home");
+    process.env.AGENT_TEAMS_AGENTS_DIR = agentsDir;
+    try {
+      await expect(
+        runTask({ description: "42", cwd: tmp }),
+      ).rejects.toThrow(/Configure pbi.vault/);
+    } finally {
+      if (prev) process.env.AGENT_TEAMS_OBSIDIAN_VAULT = prev;
+      if (prevHome) process.env.AGENT_TEAMS_HOME = prevHome;
+      else delete process.env.AGENT_TEAMS_HOME;
+      if (prevAgentsDir) process.env.AGENT_TEAMS_AGENTS_DIR = prevAgentsDir;
+      else delete process.env.AGENT_TEAMS_AGENTS_DIR;
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
