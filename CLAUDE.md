@@ -74,6 +74,10 @@ To add or edit an agent, just touch the markdown under `agents/` — **no rebuil
 
 Built-in Claude agents (`general-purpose`, `Explore`, `Plan`, `statusline-setup`) are also accepted as team members — `validateTeamAgainstRegistry` allow-lists them.
 
+## PBI mode
+
+`/pbi "<idea>"` triggers an alternative flow that uses a fixed roster (Pax/Quinn/Aki + Sage) to draft a Product Backlog Item and write it to a configured Obsidian Vault. Pax runs first in `interview` mode and may emit clarifying questions — the slash command relays them to the user, then `agent-teams pbi-resume <task_id> --answers <json>` continues to draft → Quinn ∥ Aki → Assembly. Configure the destination via the `pbi:` block in `agent-team.yaml` (or `workspaces/<name>.yaml`); env vars `AGENT_TEAMS_OBSIDIAN_VAULT` / `_PBI_DIR` act as fallback. `/team <number>` (e.g. `/team 42`) reads back a generated PBI for implementation. Spec: `docs/superpowers/specs/2026-04-25-pbi-creation-mode-design.md`.
+
 ## Agent model
 
 Each agent is an **independent** markdown file at `agents/<Name>.md`. The filename must match the frontmatter `name`. The `name` is the routing key used everywhere (team.yaml, planner output, `--agents` JSON key, report signature).

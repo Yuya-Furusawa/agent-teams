@@ -72,6 +72,18 @@ You can also invoke the CLI directly from a terminal:
 agent-teams run "add a hello-world section to the README"
 ```
 
+### PBI mode
+
+`/pbi "<idea>"` (or `agent-teams pbi "<idea>"`) generates a Product Backlog Item via Pax (PdM) → Quinn (QA) ∥ Aki (Eng) and writes it to a configured Obsidian Vault. Configure the destination in `agent-team.yaml`:
+
+```yaml
+pbi:
+  vault: /Users/me/Obsidian/MyVault
+  dir: PBIs/Inbox       # optional, defaults to "PBIs"
+```
+
+If Pax determines that the idea lacks background information, it returns clarifying questions; the slash command relays them to the user, then `agent-teams pbi-resume <task_id> --answers '{...}'` continues. Once a PBI is generated, `/team <number>` (e.g. `/team 42`) reads it back and runs the implementation flow.
+
 ### Multi-repo workspaces
 
 For tasks that span multiple repos (e.g., adding a feature that touches both a frontend and backend repo), define a **workspace** in `~/.agent-teams/workspaces/<name>.yaml`:
