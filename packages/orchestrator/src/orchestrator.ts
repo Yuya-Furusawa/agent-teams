@@ -36,7 +36,7 @@ import {
   type Workspace,
 } from "./workspace.js";
 
-interface SubTaskEntry {
+export interface SubTaskEntry {
   id: string;
   index: number;
   plan: SubTaskPlan;
@@ -438,7 +438,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   }
 }
 
-function prepareRound(params: {
+export function prepareRound(params: {
   storage: Storage;
   taskId: string;
   plan: { subTasks: SubTaskPlan[] };
@@ -568,7 +568,7 @@ async function finalizeWorkspaceStatus(
   });
 }
 
-function resolveWorkerScope(
+export function resolveWorkerScope(
   workspace: Workspace | undefined,
   targetRepoName: string | undefined,
   fallbackCwd: string,
@@ -597,7 +597,7 @@ interface DagNode<T> {
  * missing references are expected to be caught earlier by validatePlanDag; they
  * are re-detected here as a safety net.
  */
-async function runDag<T>(
+export async function runDag<T>(
   nodes: DagNode<T>[],
   limit: number,
   fn: (item: T) => Promise<void>,
@@ -634,7 +634,7 @@ async function runDag<T>(
   }
 }
 
-function truncate(s: string, n: number): string {
+export function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + "…";
 }
