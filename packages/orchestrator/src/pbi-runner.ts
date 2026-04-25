@@ -27,6 +27,7 @@ import { formatPbiFilename } from "./pbi-filename.js";
 import { extractSlug } from "./pbi-frontmatter.js";
 import type { PbiConfig, Team } from "./team.js";
 import type { SubTaskPlan } from "./planner-schema.js";
+import { loadWorkspace } from "./workspace.js";
 
 const FIXED_PBI_AGENTS = ["Pax", "Quinn", "Aki"] as const;
 const PLANNER_NAME = "Sage";
@@ -39,6 +40,7 @@ const PBI_TEAM: Team = {
 export interface RunPbiTaskOptions {
   idea: string;
   cwd?: string;
+  workspace?: string;
 }
 
 export interface PbiQuestionsOutput {
@@ -132,10 +134,21 @@ function parseInterviewReport(report: string):
 }
 
 export async function runPbiTask(opts: RunPbiTaskOptions): Promise<RunPbiTaskResult> {
+  if (opts.workspace && opts.cwd) {
+    throw new Error("--workspace cannot be combined with --cwd");
+  }
   const registry = loadAgentRegistry();
   const inlineAgents = buildPbiInlineAgents(registry);
-  const cwd = opts.cwd ?? process.cwd();
-  const pbiCfg = loadPbiConfig({ cwd });
+  let cwd: string;
+  let pbiCfg: PbiConfig;
+  if (opts.workspace) {
+    const ws = loadWorkspace(opts.workspace);
+    cwd = ws.repos[0]!.path;
+    pbiCfg = loadPbiConfig({ workspace: ws });
+  } else {
+    cwd = opts.cwd ?? process.cwd();
+    pbiCfg = loadPbiConfig({ cwd });
+  }
   if (!existsSync(join(pbiCfg.vault, pbiCfg.dir))) {
     throw new Error(
       `PBI directory does not exist: ${join(pbiCfg.vault, pbiCfg.dir)}. Create it first or fix pbi.vault/dir.`,

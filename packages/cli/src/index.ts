@@ -53,14 +53,23 @@ program
   .description("Generate a Product Backlog Item from a free-form idea (writes to Obsidian Vault)")
   .argument("<idea...>", "PBI idea in natural language")
   .option("-c, --cwd <path>", "Working directory (defaults to current dir)")
-  .action(async (ideaWords: string[], options: { cwd?: string }) => {
+  .option("-w, --workspace <name>", "Run in a multi-repo workspace defined in ~/.agent-teams/workspaces/<name>.yaml")
+  .action(async (ideaWords: string[], options: { cwd?: string; workspace?: string }) => {
     const idea = ideaWords.join(" ").trim();
     if (!idea) {
       console.error("error: idea is required");
       process.exit(1);
     }
+    if (options.workspace && options.cwd) {
+      console.error("error: --workspace cannot be combined with --cwd");
+      process.exit(1);
+    }
     try {
-      const result = await runPbiTask({ idea, ...(options.cwd ? { cwd: options.cwd } : {}) });
+      const result = await runPbiTask({
+        idea,
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+        ...(options.workspace ? { workspace: options.workspace } : {}),
+      });
       if (result.kind === "completed") {
         console.log(`task: ${result.taskId}`);
         console.log(`pbi: PBI-${String(result.pbiId).padStart(3, "0")}`);

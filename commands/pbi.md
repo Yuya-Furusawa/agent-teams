@@ -13,6 +13,12 @@ agent-teams の PBI 作成モードを起動します。Pax (PdM) → Quinn (QA)
 agent-teams pbi "$ARGUMENTS"
 ```
 
+ワークスペース内で実行する場合は `--workspace <name>` を付けてください（その workspace の `pbi:` ブロック / 環境変数を参照します）:
+
+```bash
+agent-teams pbi --workspace my-app "$ARGUMENTS"
+```
+
 実行後、stdout を見て分岐してください:
 
 1. **`task: ... / pbi: PBI-NNN / path: /...`** が出力された場合
