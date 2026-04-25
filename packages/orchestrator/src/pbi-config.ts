@@ -35,7 +35,7 @@ function fromEnv(): PbiConfig | null {
 export function loadPbiConfig(opts: LoadPbiConfigOptions): PbiConfig {
   // workspace mode: read ONLY the workspace's pbi block (per spec). Do not look at repos[0].
   if (opts.workspace) {
-    const wsPbi = (opts.workspace as { pbi?: PbiConfig }).pbi;
+    const wsPbi = opts.workspace.pbi;
     if (wsPbi) return { ...wsPbi, vault: expandHome(wsPbi.vault) };
     const env = fromEnv();
     if (env) return env;

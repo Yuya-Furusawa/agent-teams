@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
@@ -45,6 +45,10 @@ describe("TeamSchema with pbi block", () => {
 });
 
 describe("loadPbiConfig", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function tmpRepo(yaml: string): string {
     const dir = mkdtempSync(join(tmpdir(), "agent-teams-test-"));
     writeFileSync(join(dir, "agent-team.yaml"), yaml, "utf8");
@@ -60,33 +64,18 @@ describe("loadPbiConfig", () => {
 
   it("falls back to env vars when yaml has no pbi block", () => {
     const cwd = tmpRepo(`name: t\nplanner: Sage\nworkers: [Kai]\n`);
-    const prevVault = process.env.AGENT_TEAMS_OBSIDIAN_VAULT;
-    const prevDir = process.env.AGENT_TEAMS_OBSIDIAN_PBI_DIR;
-    process.env.AGENT_TEAMS_OBSIDIAN_VAULT = "/env/vault";
-    process.env.AGENT_TEAMS_OBSIDIAN_PBI_DIR = "Inbox";
-    try {
-      const cfg = loadPbiConfig({ cwd });
-      expect(cfg.vault).toBe("/env/vault");
-      expect(cfg.dir).toBe("Inbox");
-    } finally {
-      process.env.AGENT_TEAMS_OBSIDIAN_VAULT = prevVault;
-      process.env.AGENT_TEAMS_OBSIDIAN_PBI_DIR = prevDir;
-    }
+    vi.stubEnv("AGENT_TEAMS_OBSIDIAN_VAULT", "/env/vault");
+    vi.stubEnv("AGENT_TEAMS_OBSIDIAN_PBI_DIR", "Inbox");
+    const cfg = loadPbiConfig({ cwd });
+    expect(cfg.vault).toBe("/env/vault");
+    expect(cfg.dir).toBe("Inbox");
   });
 
   it("env dir defaults to 'PBIs' when only vault env is set", () => {
     const cwd = tmpRepo(`name: t\nplanner: Sage\nworkers: [Kai]\n`);
-    const prevVault = process.env.AGENT_TEAMS_OBSIDIAN_VAULT;
-    const prevDir = process.env.AGENT_TEAMS_OBSIDIAN_PBI_DIR;
-    process.env.AGENT_TEAMS_OBSIDIAN_VAULT = "/env/vault";
-    delete process.env.AGENT_TEAMS_OBSIDIAN_PBI_DIR;
-    try {
-      const cfg = loadPbiConfig({ cwd });
-      expect(cfg.dir).toBe("PBIs");
-    } finally {
-      process.env.AGENT_TEAMS_OBSIDIAN_VAULT = prevVault;
-      process.env.AGENT_TEAMS_OBSIDIAN_PBI_DIR = prevDir;
-    }
+    vi.stubEnv("AGENT_TEAMS_OBSIDIAN_VAULT", "/env/vault");
+    const cfg = loadPbiConfig({ cwd });
+    expect(cfg.dir).toBe("PBIs");
   });
 
   it("expands ~ in vault path", () => {
@@ -97,13 +86,7 @@ describe("loadPbiConfig", () => {
 
   it("throws when no yaml block and no env", () => {
     const cwd = tmpRepo(`name: t\nplanner: Sage\nworkers: [Kai]\n`);
-    const prev = process.env.AGENT_TEAMS_OBSIDIAN_VAULT;
-    delete process.env.AGENT_TEAMS_OBSIDIAN_VAULT;
-    try {
-      expect(() => loadPbiConfig({ cwd })).toThrow(/Configure pbi.vault/);
-    } finally {
-      process.env.AGENT_TEAMS_OBSIDIAN_VAULT = prev;
-    }
+    expect(() => loadPbiConfig({ cwd })).toThrow(/Configure pbi.vault/);
   });
 
   it("workspace mode reads only the workspace yaml, not repos[0]/agent-team.yaml", () => {
@@ -113,5 +96,20 @@ describe("loadPbiConfig", () => {
     const cfg = loadPbiConfig({ workspace: ws });
     expect(cfg.vault).toBe("/ws/vault");
     expect(cfg.dir).toBe("PBIs");
+  });
+
+  it("workspace mode falls back to env when workspace has no pbi block", () => {
+    vi.stubEnv("AGENT_TEAMS_OBSIDIAN_VAULT", "/env/vault");
+    const ws = { name: "w", repos: [{ name: "fe", path: "/whatever" }] };
+    const cfg = loadPbiConfig({ workspace: ws });
+    expect(cfg.vault).toBe("/env/vault");
+    expect(cfg.dir).toBe("PBIs");
+  });
+
+  it("workspace mode throws when no workspace pbi and no env", () => {
+    // ensure env is unset
+    vi.unstubAllEnvs();
+    const ws = { name: "my-ws", repos: [{ name: "fe", path: "/whatever" }] };
+    expect(() => loadPbiConfig({ workspace: ws })).toThrow(/Configure pbi.vault in workspaces\/my-ws.yaml/);
   });
 });
