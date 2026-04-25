@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { dbPath } from "./paths.js";
 
-export type TaskStatus = "planning" | "running" | "completed" | "failed";
+export type TaskStatus = "planning" | "running" | "completed" | "failed" | "awaiting_user_input";
 export type SubTaskStatus = "pending" | "running" | "completed" | "failed";
 
 export interface TaskRow {
@@ -16,6 +16,7 @@ export interface TaskRow {
   completed_at: number | null;
   workspace_name: string | null;
   repos: string | null;
+  pbi_state: Record<string, unknown> | null;
 }
 
 export interface SubTaskRow {
@@ -57,7 +58,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at INTEGER NOT NULL,
   completed_at INTEGER,
   workspace_name TEXT,
-  repos TEXT
+  repos TEXT,
+  pbi_state TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sub_tasks (
@@ -108,6 +110,9 @@ export class Storage {
     if (!taskColNames.has("repos")) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN repos TEXT`);
     }
+    if (!taskColNames.has("pbi_state")) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN pbi_state TEXT`);
+    }
     const subCols = this.db.pragma("table_info(sub_tasks)") as Array<{ name: string }>;
     const subColNames = new Set(subCols.map((c) => c.name));
     if (!subColNames.has("target_repo")) {
@@ -126,23 +131,29 @@ export class Storage {
   }
 
   insertTask(
-    row: Omit<TaskRow, "completed_at" | "workspace_name" | "repos"> & {
+    row: Omit<TaskRow, "completed_at" | "workspace_name" | "repos" | "pbi_state"> & {
       completed_at?: number | null;
       workspace_name?: string | null;
       repos?: string | null;
+      pbi_state?: Record<string, unknown> | null;
     },
   ): void {
     this.db
       .prepare(
-        `INSERT INTO tasks (id, description, cwd, team_name, status, created_at, completed_at, workspace_name, repos)
-         VALUES (@id, @description, @cwd, @team_name, @status, @created_at, @completed_at, @workspace_name, @repos)`,
+        `INSERT INTO tasks (id, description, cwd, team_name, status, created_at, completed_at, workspace_name, repos, pbi_state)
+         VALUES (@id, @description, @cwd, @team_name, @status, @created_at, @completed_at, @workspace_name, @repos, @pbi_state)`,
       )
       .run({
         completed_at: null,
         workspace_name: null,
         repos: null,
         ...row,
-      });
+        pbi_state: row.pbi_state ? JSON.stringify(row.pbi_state) : null,
+      } as never);
+  }
+
+  updatePbiState(id: string, state: Record<string, unknown>): void {
+    this.db.prepare(`UPDATE tasks SET pbi_state = ? WHERE id = ?`).run(JSON.stringify(state), id);
   }
 
   updateTaskStatus(id: string, status: TaskStatus, completedAt?: number | null): void {
@@ -205,7 +216,14 @@ export class Storage {
   }
 
   getTask(id: string): TaskRow | undefined {
-    return this.db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as TaskRow | undefined;
+    const raw = this.db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as
+      | (Omit<TaskRow, "pbi_state"> & { pbi_state: string | null })
+      | undefined;
+    if (!raw) return undefined;
+    return {
+      ...raw,
+      pbi_state: raw.pbi_state ? (JSON.parse(raw.pbi_state) as Record<string, unknown>) : null,
+    };
   }
 
   listSubTasks(taskId: string): SubTaskRow[] {

@@ -59,3 +59,45 @@ describe("Storage migration", () => {
     storage.close();
   });
 });
+
+describe("PBI state column", () => {
+  it("accepts awaiting_user_input status", () => {
+    const path = `${tmpdir()}/agent-teams-pbi-${Date.now()}.sqlite`;
+    const storage = new Storage(path);
+    try {
+      storage.insertTask({
+        id: "t1",
+        description: "test",
+        cwd: "/",
+        team_name: "t",
+        status: "awaiting_user_input" as any,
+        created_at: 1,
+      });
+      const t = storage.getTask("t1");
+      expect(t?.status).toBe("awaiting_user_input");
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("stores and reads pbi_state JSON", () => {
+    const path = `${tmpdir()}/agent-teams-pbi-${Date.now()}.sqlite`;
+    const storage = new Storage(path);
+    try {
+      storage.insertTask({
+        id: "t2",
+        description: "test",
+        cwd: "/",
+        team_name: "t",
+        status: "running",
+        created_at: 1,
+      });
+      const state = { phase: "awaiting_user_input", pbi_id: 42 } as const;
+      storage.updatePbiState("t2", state);
+      const t = storage.getTask("t2");
+      expect(t?.pbi_state).toEqual(state);
+    } finally {
+      storage.close();
+    }
+  });
+});
