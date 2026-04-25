@@ -109,7 +109,7 @@ describe("loadPbiConfig", () => {
   it("workspace mode reads only the workspace yaml, not repos[0]/agent-team.yaml", () => {
     // 後続 task で workspace ロード経路を作るので、ここでは workspace yaml の参照ロジックのみ確認:
     // workspaceConfig を直接渡せる第二経路を loadPbiConfig が持っていることを確認
-    const ws = { name: "w", repos: [{ name: "fe", path: "/whatever" }], pbi: { vault: "/ws/vault", dir: "PBIs" } } as const;
+    const ws = { name: "w", repos: [{ name: "fe", path: "/whatever" }], pbi: { vault: "/ws/vault", dir: "PBIs" } };
     const cfg = loadPbiConfig({ workspace: ws });
     expect(cfg.vault).toBe("/ws/vault");
     expect(cfg.dir).toBe("PBIs");
