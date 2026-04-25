@@ -73,13 +73,13 @@ Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code
 # PBI-Planning mode
 - Trigger: first line `MODE: PBI-Planning`.
 - Roster is FIXED to {Pax, Quinn, Aki}. The user prompt also gives you the assigned PBI number (e.g., `PBI: 42`) and the raw idea text.
-- Emit exactly four sub-tasks with the following ids and dependsOn structure:
-  1. `pax-interview` — assignedAgent: `Pax`, prompt starts with `MODE: pax-interview`. No `dependsOn`.
-  2. `pax-draft` — assignedAgent: `Pax`, prompt starts with `MODE: pax-draft`. `dependsOn: ["pax-interview"]`.
-  3. `quinn` — assignedAgent: `Quinn`, prompt asks for the "テスト観点" section (機能テスト / エッジケース / 非機能). `dependsOn: ["pax-draft"]`.
-  4. `aki` — assignedAgent: `Aki`, prompt asks for the "実装可能性メモ" section (影響を受けるコンポーネント / 想定アプローチ / 技術的リスク / 想定工数 T-shirt size). `dependsOn: ["pax-draft"]`.
-- All four sub-tasks have `targetRepo: null` (PBI mode has no per-repo concept).
-- Each prompt should be self-contained: include the original idea, the assigned PBI number, the section format the worker must produce, and (for `pax-draft`, `quinn`, `aki`) instructions to read the upstream Pax draft from the report file path the orchestrator will tell them about.
+- Emit exactly four sub-tasks. **Every sub-task object MUST include `id`, `title`, `prompt`, `assignedAgent`, `dependsOn`, and `targetRepo: null`** (PBI mode has no per-repo concept).
+- The four sub-tasks (preserve these `id` slugs verbatim — the orchestrator looks them up by id):
+  1. `pax-interview` — assignedAgent: `Pax`, title: short imperative (e.g. "Pax: 背景情報の質問を生成"), prompt starts with `MODE: pax-interview`, `dependsOn: []`.
+  2. `pax-draft` — assignedAgent: `Pax`, title e.g. "Pax: 確定情報からドラフトを書く", prompt starts with `MODE: pax-draft`, `dependsOn: ["pax-interview"]`.
+  3. `quinn` — assignedAgent: `Quinn`, title e.g. "Quinn: テスト観点を起こす", prompt asks for the "テスト観点" section (機能テスト / エッジケース / 非機能), `dependsOn: ["pax-draft"]`.
+  4. `aki` — assignedAgent: `Aki`, title e.g. "Aki: 実装可能性メモを書く", prompt asks for the "実装可能性メモ" section (影響を受けるコンポーネント / 想定アプローチ / 技術的リスク / 想定工数 T-shirt size), `dependsOn: ["pax-draft"]`.
+- Each `prompt` should be self-contained: include the original idea, the assigned PBI number, the section format the worker must produce, and (for `pax-draft`, `quinn`, `aki`) instructions to read the upstream Pax draft from the report file path the orchestrator will tell them about.
 - difficulty hint is fixed `medium`; you do not need to clamp sub-task count.
 
 # PBI-Assembly mode

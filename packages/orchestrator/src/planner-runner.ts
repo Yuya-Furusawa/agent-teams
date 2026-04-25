@@ -367,7 +367,20 @@ export function buildPbiPlannerPrompt(args: { idea: string; pbiId: number }): st
     "- Aki (role: implementer)",
     "",
     "## Required output",
-    "Emit a SubTaskPlan JSON with exactly four sub-tasks (pax-interview → pax-draft → {quinn, aki}) following the contract in your system prompt. All targetRepo values MUST be null.",
+    "Emit a SubTaskPlan JSON with exactly four sub-tasks (pax-interview → pax-draft → {quinn, aki}). Each sub-task object MUST include `id`, `title`, `prompt`, `assignedAgent`. `targetRepo` MUST be `null` (PBI mode is repo-agnostic). `dependsOn` is an array (empty for pax-interview).",
+    "",
+    "Skeleton (fill the prompt fields with detailed self-contained instructions per the contract in your system prompt; titles should be short imperative phrases):",
+    "```json",
+    "{",
+    "  \"overallStrategy\": \"<one paragraph>\",",
+    "  \"subTasks\": [",
+    "    { \"id\": \"pax-interview\", \"title\": \"Pax: 背景情報の質問を生成\", \"assignedAgent\": \"Pax\", \"targetRepo\": null, \"dependsOn\": [], \"prompt\": \"MODE: pax-interview\\n...\" },",
+    "    { \"id\": \"pax-draft\",     \"title\": \"Pax: 確定情報からドラフトを書く\", \"assignedAgent\": \"Pax\", \"targetRepo\": null, \"dependsOn\": [\"pax-interview\"], \"prompt\": \"MODE: pax-draft\\n...\" },",
+    "    { \"id\": \"quinn\",         \"title\": \"Quinn: テスト観点を起こす\",       \"assignedAgent\": \"Quinn\", \"targetRepo\": null, \"dependsOn\": [\"pax-draft\"], \"prompt\": \"...\" },",
+    "    { \"id\": \"aki\",           \"title\": \"Aki: 実装可能性メモを書く\",      \"assignedAgent\": \"Aki\", \"targetRepo\": null, \"dependsOn\": [\"pax-draft\"], \"prompt\": \"...\" }",
+    "  ]",
+    "}",
+    "```",
   ].join("\n");
 }
 

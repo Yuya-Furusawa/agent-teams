@@ -117,9 +117,10 @@ export const SubTaskPlanSchema = z.object({
     .describe("One-sentence justification for the agent selection and the sub-task scope"),
   targetRepo: z
     .string()
+    .nullable()
     .optional()
     .describe(
-      "Name of the primary repo this sub-task operates in. Required in workspace mode (must match one of the repo names provided); omitted in single-repo mode.",
+      "Name of the primary repo this sub-task operates in. Required in workspace mode (must match one of the repo names provided); omit or use null in single-repo / PBI mode.",
     ),
   dependsOn: z
     .array(z.string().min(1))

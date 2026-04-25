@@ -559,7 +559,7 @@ export async function runRoundDag(params: {
     params.storage.updateSubTaskStatus(entry.id, "running");
     const { workerCwd, targetRepo, peerRepos } = resolveWorkerScope(
       params.ws,
-      entry.plan.targetRepo,
+      entry.plan.targetRepo ?? undefined,
       params.cwd,
     );
     try {

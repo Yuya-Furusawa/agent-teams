@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
   RefixPlanSchema,
+  TaskPlanSchema,
   buildRefixPlannerPrompt,
   buildRefixWorkerPrompt,
   buildSummaryPrompt,
 } from "./planner-schema.js";
+
+describe("TaskPlanSchema targetRepo", () => {
+  it("accepts targetRepo: null (PBI mode emits null per spec)", () => {
+    const parsed = TaskPlanSchema.parse({
+      overallStrategy: "x",
+      subTasks: [
+        { id: "a", title: "t", prompt: "p", assignedAgent: "Pax", targetRepo: null, dependsOn: [] },
+      ],
+    });
+    expect(parsed.subTasks[0]!.targetRepo).toBeNull();
+  });
+  it("accepts targetRepo omitted entirely", () => {
+    const parsed = TaskPlanSchema.parse({
+      overallStrategy: "x",
+      subTasks: [{ id: "a", title: "t", prompt: "p", assignedAgent: "Pax", dependsOn: [] }],
+    });
+    expect(parsed.subTasks[0]!.targetRepo).toBeUndefined();
+  });
+});
 
 describe("RefixPlanSchema", () => {
   it("accepts an empty subTasks array", () => {

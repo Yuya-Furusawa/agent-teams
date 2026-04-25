@@ -11,6 +11,15 @@ describe("buildPbiPlannerPrompt", () => {
     expect(p).toContain("PBI: 42");
     expect(p).toContain("add X");
   });
+  it("emits a JSON skeleton mentioning all required sub-task fields", () => {
+    const p = buildPbiPlannerPrompt({ idea: "x", pbiId: 1 });
+    expect(p).toContain("pax-interview");
+    expect(p).toContain("pax-draft");
+    expect(p).toContain("quinn");
+    expect(p).toContain("aki");
+    expect(p).toContain("\"title\":");
+    expect(p).toContain("\"targetRepo\": null");
+  });
 });
 
 describe("buildPbiAssemblyPrompt", () => {
