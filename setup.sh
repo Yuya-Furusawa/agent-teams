@@ -121,6 +121,7 @@ link_command() {
 }
 link_command "$REPO_ROOT/commands/team.md" "team.md"
 link_command "$REPO_ROOT/commands/team-ws.md" "team-ws.md"
+link_command "$REPO_ROOT/commands/pbi.md" "pbi.md"
 
 step "creating data directories"
 run "mkdir -p \"$AGENT_TEAMS_HOME/tasks\""
@@ -148,6 +149,6 @@ usage:
 
 data directory:   $AGENT_TEAMS_HOME
 workspaces:       $AGENT_TEAMS_HOME/workspaces/
-slash commands:   $CLAUDE_COMMANDS_DIR/team.md, $CLAUDE_COMMANDS_DIR/team-ws.md
+slash commands:   $CLAUDE_COMMANDS_DIR/team.md, $CLAUDE_COMMANDS_DIR/team-ws.md, $CLAUDE_COMMANDS_DIR/pbi.md
 cli linked at:    $AGENT_TEAMS_BIN_DIR/agent-teams$PATH_WARNING
 EOF
