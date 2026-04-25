@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { listWorkspaces, loadWorkspace, runTask } from "@agent-teams/orchestrator";
+import { listWorkspaces, loadWorkspace, runTask, runPbiTask, resumePbiTask } from "@agent-teams/orchestrator";
 import { Command } from "commander";
 
 const program = new Command();
@@ -47,6 +47,63 @@ program
       }
     },
   );
+
+program
+  .command("pbi")
+  .description("Generate a Product Backlog Item from a free-form idea (writes to Obsidian Vault)")
+  .argument("<idea...>", "PBI idea in natural language")
+  .option("-c, --cwd <path>", "Working directory (defaults to current dir)")
+  .action(async (ideaWords: string[], options: { cwd?: string }) => {
+    const idea = ideaWords.join(" ").trim();
+    if (!idea) {
+      console.error("error: idea is required");
+      process.exit(1);
+    }
+    try {
+      const result = await runPbiTask({ idea, ...(options.cwd ? { cwd: options.cwd } : {}) });
+      if (result.kind === "completed") {
+        console.log(`task: ${result.taskId}`);
+        console.log(`pbi: PBI-${String(result.pbiId).padStart(3, "0")}`);
+        console.log(`path: ${result.pbiPath}`);
+        process.exit(0);
+      } else {
+        console.log(`<<<PBI_QUESTIONS task_id=${result.taskId} pbi_id=${result.pbiId}>>>`);
+        console.log(JSON.stringify({ questions: result.questions }, null, 2));
+        console.log(`<<<END>>>`);
+        process.exit(0);
+      }
+    } catch (err) {
+      console.error(`agent-teams pbi failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("pbi-resume")
+  .description("Resume a PBI run that was paused awaiting user input")
+  .argument("<task_id>", "task id printed in the previous pbi sentinel block")
+  .requiredOption("--answers <json>", "JSON object mapping question id to answer text")
+  .action(async (taskId: string, options: { answers: string }) => {
+    let answers: Record<string, string>;
+    try {
+      const parsed = JSON.parse(options.answers) as Record<string, unknown>;
+      answers = Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, String(v)]));
+    } catch (err) {
+      console.error(`agent-teams pbi-resume: invalid --answers JSON: ${(err as Error).message}`);
+      process.exit(1);
+      return;
+    }
+    try {
+      const result = await resumePbiTask({ taskId, answers });
+      console.log(`task: ${result.taskId}`);
+      console.log(`pbi: PBI-${String(result.pbiId).padStart(3, "0")}`);
+      console.log(`path: ${result.pbiPath}`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`agent-teams pbi-resume failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
 
 const workspaceCmd = program
   .command("workspace")
