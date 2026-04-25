@@ -351,3 +351,125 @@ export async function runSummarizer(opts: {
   }) as { summary: string; status?: string };
   return { summary: parsed.summary, status: parsed.status ?? "partial" };
 }
+
+export function buildPbiPlannerPrompt(args: { idea: string; pbiId: number }): string {
+  return [
+    "MODE: PBI-Planning",
+    "",
+    `PBI: ${args.pbiId}`,
+    "",
+    "## User idea",
+    args.idea,
+    "",
+    "## Roster (fixed)",
+    "- Pax (role: product-manager)",
+    "- Quinn (role: qa-engineer)",
+    "- Aki (role: implementer)",
+    "",
+    "## Required output",
+    "Emit a SubTaskPlan JSON with exactly four sub-tasks (pax-interview → pax-draft → {quinn, aki}) following the contract in your system prompt. All targetRepo values MUST be null.",
+  ].join("\n");
+}
+
+interface PbiWorkerReport {
+  status: string;
+  content: string;
+}
+
+export function buildPbiAssemblyPrompt(args: {
+  idea: string;
+  pbiId: number;
+  reports: { pax: PbiWorkerReport; quinn: PbiWorkerReport; aki: PbiWorkerReport };
+}): string {
+  const sections: string[] = [
+    "MODE: PBI-Assembly",
+    "",
+    `PBI: ${args.pbiId}`,
+    "",
+    "## Original user idea",
+    args.idea,
+    "",
+    "## Worker reports",
+  ];
+  for (const [name, key] of [["Pax (draft)", "pax"], ["Quinn", "quinn"], ["Aki", "aki"]] as const) {
+    const r = args.reports[key];
+    sections.push("", `### ${name} — status: ${r.status}`);
+    sections.push(r.content || "_(empty)_");
+  }
+  sections.push(
+    "",
+    "## Required output",
+    "Emit the full PBI markdown document including YAML frontmatter, exactly per the PBI-Assembly contract. No code-fence wrapping. No fenced JSON.",
+  );
+  return sections.join("\n");
+}
+
+export async function runPbiPlanner(opts: {
+  idea: string;
+  pbiId: number;
+  cwd: string;
+  team: Team;
+  plannerAgentName: string;
+  inlineAgents: Record<string, InlineAgentDefinition>;
+  eventsPath?: string;
+  onEvent?: (event: StreamJsonEvent) => void;
+}): Promise<TaskPlan> {
+  const prompt = buildPbiPlannerPrompt({ idea: opts.idea, pbiId: opts.pbiId });
+  const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
+  const runner = getAgentRunner();
+  const result = await runner.run({
+    agent: opts.plannerAgentName,
+    prompt,
+    cwd: opts.cwd,
+    includeHookEvents: false,
+    permissionMode: "bypassPermissions",
+    model: opts.team.defaults?.model,
+    inlineAgents: opts.inlineAgents,
+    onEvent: (e) => { fileLogger?.(e); opts.onEvent?.(e); },
+  });
+  if (result.exitCode !== 0) throw new Error(`pbi-planner exited with code ${result.exitCode}`);
+  if (!result.parsedJson) {
+    throw new Error(`pbi-planner did not produce a parseable JSON block. last text: ${result.lastText.slice(0, 500)}`);
+  }
+  const parsed = TaskPlanSchema.parse(result.parsedJson);
+  validatePlanRoster(parsed, ["Pax", "Quinn", "Aki"]);
+  validatePlanDag(parsed);
+  for (const st of parsed.subTasks) {
+    if (st.targetRepo) {
+      throw new Error(`pbi-planner: sub-task "${st.id}" must not have targetRepo (got "${st.targetRepo}")`);
+    }
+  }
+  return parsed;
+}
+
+export async function runPbiAssembly(opts: {
+  idea: string;
+  pbiId: number;
+  reports: { pax: PbiWorkerReport; quinn: PbiWorkerReport; aki: PbiWorkerReport };
+  cwd: string;
+  team: Team;
+  plannerAgentName: string;
+  inlineAgents: Record<string, InlineAgentDefinition>;
+  eventsPath?: string;
+  onEvent?: (event: StreamJsonEvent) => void;
+}): Promise<{ markdown: string }> {
+  const prompt = buildPbiAssemblyPrompt({ idea: opts.idea, pbiId: opts.pbiId, reports: opts.reports });
+  const fileLogger = opts.eventsPath ? eventLogger(opts.eventsPath) : undefined;
+  const runner = getAgentRunner();
+  const result = await runner.run({
+    agent: opts.plannerAgentName,
+    prompt,
+    cwd: opts.cwd,
+    includeHookEvents: false,
+    permissionMode: "bypassPermissions",
+    model: opts.team.defaults?.model,
+    inlineAgents: opts.inlineAgents,
+    onEvent: (e) => { fileLogger?.(e); opts.onEvent?.(e); },
+  });
+  if (result.exitCode !== 0) throw new Error(`pbi-assembly exited with code ${result.exitCode}`);
+  let md = result.lastText.trim();
+  const fenceMatch = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/m.exec(md);
+  if (fenceMatch) md = fenceMatch[1]!.trim();
+  if (!md) throw new Error(`pbi-assembly produced empty output`);
+  return { markdown: md };
+}
