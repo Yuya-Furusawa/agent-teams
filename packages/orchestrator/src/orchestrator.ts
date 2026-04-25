@@ -511,7 +511,7 @@ export function prepareRound(params: {
   return entries;
 }
 
-async function runRoundDag(params: {
+export async function runRoundDag(params: {
   entries: SubTaskEntry[];
   storage: Storage;
   taskId: string;

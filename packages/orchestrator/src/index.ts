@@ -1,4 +1,13 @@
 export { runTask, type RunTaskOptions, type RunTaskResult } from "./orchestrator.js";
+export {
+  runPbiTask,
+  resumePbiTask,
+  type RunPbiTaskOptions,
+  type RunPbiTaskResult,
+  type PbiQuestionsOutput,
+  type PbiCompletedOutput,
+} from "./pbi-runner.js";
+export { loadPbiConfig } from "./pbi-config.js";
 export { runWorker, type WorkerRunParams } from "./worker-runner.js";
 export { loadTeam, validateTeamAgainstRegistry, type Team } from "./team.js";
 export {
