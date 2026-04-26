@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTask, DesignCheckpointReached } from "./orchestrator.js";
+import { runTask, DesignCheckpointReached, computeAllowedAssignees, type SubTaskEntry } from "./orchestrator.js";
 import { parsePbiNumber } from "./pbi-input.js";
 import {
   __setAgentRunnerFactoryForTests as setPlannerFactory,
@@ -253,5 +253,38 @@ describe("DesignCheckpointReached", () => {
     expect(err.checkpoint.modified_files).toEqual(["a.pen"]);
     expect(err.completedIds.has("sub-h")).toBe(true);
     expect(err).toBeInstanceOf(Error);
+  });
+});
+
+describe("computeAllowedAssignees", () => {
+  const mkEntry = (id: string, agent: string, deps: string[] = []): SubTaskEntry => ({
+    id,
+    index: 0,
+    plan: {
+      id,
+      title: "t",
+      prompt: "p",
+      assignedAgent: agent,
+      dependsOn: deps,
+    },
+  });
+
+  it("excludes designer-role agents from refix allowedAssignees", () => {
+    const round1Entries = [
+      mkEntry("h", "Hana"),
+      mkEntry("k", "Kai", ["h"]),
+    ];
+    const roleOf = (n: string) => (n === "Hana" ? "designer" : "implementer");
+    expect(computeAllowedAssignees(round1Entries, roleOf)).toEqual(["Kai"]);
+  });
+
+  it("returns deduplicated names when an agent appears in multiple sub-tasks", () => {
+    const round1Entries = [
+      mkEntry("h", "Hana"),
+      mkEntry("k1", "Kai", ["h"]),
+      mkEntry("k2", "Kai", ["h"]),
+    ];
+    const roleOf = (n: string) => (n === "Hana" ? "designer" : "implementer");
+    expect(computeAllowedAssignees(round1Entries, roleOf)).toEqual(["Kai"]);
   });
 });

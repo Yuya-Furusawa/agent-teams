@@ -67,6 +67,25 @@ export class DesignCheckpointReached extends Error {
   }
 }
 
+/**
+ * Compute the deduplicated set of agent names eligible to receive refix sub-tasks.
+ * Designer-role agents (e.g. Hana) are excluded — reviewer fix-up cycles target
+ * implementer / devops / debugger outputs only. Design feedback flows through the
+ * design-checkpoint pause/resume path instead.
+ */
+export function computeAllowedAssignees(
+  round1Entries: SubTaskEntry[],
+  roleOf: (agent: string) => string | undefined,
+): string[] {
+  return [
+    ...new Set(
+      round1Entries
+        .filter((e) => roleOf(e.plan.assignedAgent) !== "designer")
+        .map((e) => e.plan.assignedAgent),
+    ),
+  ];
+}
+
 const DEFAULT_MAX_PARALLEL = 3;
 
 export interface RunTaskOptions {
@@ -457,9 +476,7 @@ export async function runRefixPhase(params: {
       await cmuxLog({ workspace, source: "agent-teams", message: refixSkipReason });
     }
   } else {
-    const allowedAssignees = [
-      ...new Set(round1Entries.map((e) => e.plan.assignedAgent)),
-    ];
+    const allowedAssignees = computeAllowedAssignees(round1Entries, roleOf);
 
     const refixPlan = await runRefixPlanner({
       task: description,
