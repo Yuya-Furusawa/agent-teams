@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { listWorkspaces, loadWorkspace, runTask, runPbiTask, resumePbiTask } from "@agent-teams/orchestrator";
+import type { ResumeStage } from "@agent-teams/orchestrator";
 import { Command } from "commander";
 
 const program = new Command();
@@ -110,6 +111,42 @@ program
       process.exit(0);
     } catch (err) {
       console.error(`agent-teams pbi-resume failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("resume")
+  .description("Resume a stuck/failed agent-teams task (skips completed sub-tasks)")
+  .argument("[task_id]", "Task id to resume; defaults to the most recent resumable task")
+  .option("--from-stage <stage>", "Force a specific stage (triage|workers|refix-planning|summarizer)")
+  .option("--force", "Override stale-lock check (use after orchestrator crashes)")
+  .action(async (
+    taskId: string | undefined,
+    options: { fromStage?: string; force?: boolean },
+  ) => {
+    const validStages: ResumeStage[] = ["triage", "workers", "refix-planning", "summarizer"];
+    if (options.fromStage && !validStages.includes(options.fromStage as ResumeStage)) {
+      console.error(`error: --from-stage must be one of: ${validStages.join(", ")}`);
+      process.exit(1);
+    }
+    try {
+      const { resumeTask } = await import("@agent-teams/orchestrator");
+      const result = await resumeTask({
+        ...(taskId ? { taskId } : {}),
+        ...(options.fromStage ? { fromStage: options.fromStage as ResumeStage } : {}),
+        ...(options.force ? { force: true } : {}),
+      });
+      if (result.multipleCandidates && result.multipleCandidates > 1) {
+        console.error(`note: ${result.multipleCandidates} resumable tasks exist; resumed most recent (${result.taskId})`);
+      }
+      console.log(`task: ${result.taskId}`);
+      console.log(`stage: ${result.stage}`);
+      console.log(`status: ${result.status}`);
+      console.log(`summary: ${result.summaryPath}`);
+      process.exit(result.status === "completed" ? 0 : 2);
+    } catch (err) {
+      console.error(`agent-teams resume failed: ${(err as Error).message}`);
       process.exit(1);
     }
   });
