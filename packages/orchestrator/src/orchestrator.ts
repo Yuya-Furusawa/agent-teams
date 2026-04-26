@@ -638,9 +638,10 @@ export async function runDag<T>(
   nodes: DagNode<T>[],
   limit: number,
   fn: (item: T) => Promise<void>,
+  opts?: { preCompletedIds?: ReadonlySet<string> },
 ): Promise<void> {
   const cap = Math.max(1, limit);
-  const done = new Set<string>();
+  const done = new Set<string>(opts?.preCompletedIds ?? []);
   const inflight = new Map<string, Promise<void>>();
   const pending = new Map<string, DagNode<T>>();
   for (const n of nodes) pending.set(n.id, n);
