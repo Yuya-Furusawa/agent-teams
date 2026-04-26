@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { listWorkspaces, loadWorkspace, runTask, runPbiTask, resumePbiTask } from "@agent-teams/orchestrator";
+import { listWorkspaces, loadWorkspace, runTask, runPbiTask, resumePbiTask, resumeTask } from "@agent-teams/orchestrator";
 import type { ResumeStage } from "@agent-teams/orchestrator";
 import { Command } from "commander";
 
@@ -131,7 +131,6 @@ program
       process.exit(1);
     }
     try {
-      const { resumeTask } = await import("@agent-teams/orchestrator");
       const result = await resumeTask({
         ...(taskId ? { taskId } : {}),
         ...(options.fromStage ? { fromStage: options.fromStage as ResumeStage } : {}),

@@ -77,7 +77,9 @@ export async function resumeTask(opts: ResumeTaskOptions = {}): Promise<ResumeTa
   const storage = new Storage();
   try {
     const target = resolveTargetTaskId(storage, opts.taskId);
-    const taskRow = requireResumableTask(storage, target.taskId);
+    // Pre-check before acquiring lock — fast-fail for clearly non-resumable
+    // tasks. We re-validate inside the lock below to close the TOCTOU window.
+    requireResumableTask(storage, target.taskId);
 
     const lock: ResumeLock = { pid: process.pid, host: hostname(), started_at: Date.now() };
     if (!storage.acquireResumeLock(target.taskId, lock, STALE_LOCK_MS, opts.force ? { force: true } : undefined)) {
@@ -88,12 +90,18 @@ export async function resumeTask(opts: ResumeTaskOptions = {}): Promise<ResumeTa
       );
     }
     try {
+      // Re-validate after lock acquisition to close TOCTOU window: another
+      // process could have completed/failed/repurposed the task between the
+      // initial requireResumableTask and our lock acquisition. If the row is
+      // no longer resumable, requireResumableTask throws and the outer
+      // finally releases the lock automatically.
+      const validatedRow = requireResumableTask(storage, target.taskId);
       const subTasks = storage.listSubTasks(target.taskId);
       const summaryPath = summaryFile(target.taskId);
       const summaryExists = existsSync(summaryPath);
 
-      const stage = opts.fromStage ?? detectStage(taskRow, subTasks, summaryExists);
-      const result = await dispatchStage({ stage, taskRow, subTasks, storage });
+      const stage = opts.fromStage ?? detectStage(validatedRow, subTasks, summaryExists);
+      const result = await dispatchStage({ stage, taskRow: validatedRow, subTasks, storage });
 
       storage.updateTaskStatus(target.taskId, result.status, Date.now());
       const out: ResumeTaskResult = {
@@ -217,27 +225,12 @@ async function runWorkersStage(args: DispatchArgs): Promise<{ status: "completed
     args.storage.updateSubTaskStatus(s.id, "pending");
   }
 
-  // Build SubTaskEntry shape from DB rows. depends_on already stores ULIDs.
-  const entriesById = new Map<string, SubTaskEntry>();
-  for (const s of args.subTasks) {
-    const deps = s.depends_on ? (JSON.parse(s.depends_on) as string[]) : [];
-    entriesById.set(s.id, {
-      id: s.id, index: 0,
-      plan: {
-        id: s.id, title: s.title, prompt: s.prompt,
-        assignedAgent: s.assigned_agent,
-        ...(s.target_repo ? { targetRepo: s.target_repo } : {}),
-        dependsOn: deps,
-      },
-    });
-  }
-
   // Spec calls for a single runDag with preCompletedIds, but we split per-round
   // because runRoundDag carries round-specific status text (the GUI shows
   // "0/N done" vs. "refix 0/N done"). The cost is two cycles of acquire/release
   // when both rounds need work, which is rare enough to not matter in practice.
-  const round1Incomplete = incomplete.filter((s) => s.round === 1).map((s) => entriesById.get(s.id)!);
-  const round2Incomplete = incomplete.filter((s) => s.round === 2).map((s) => entriesById.get(s.id)!);
+  const round1Incomplete = incomplete.filter((s) => s.round === 1).map(entryFromRow);
+  const round2Incomplete = incomplete.filter((s) => s.round === 2).map(entryFromRow);
 
   if (round1Incomplete.length > 0) {
     await runRoundDag({
@@ -258,7 +251,7 @@ async function runWorkersStage(args: DispatchArgs): Promise<{ status: "completed
 
   // After round 1 retry, rebuild round1Entries (full list) for the refix decision.
   const refreshed = args.storage.listSubTasks(args.taskRow.id);
-  const round1Entries = refreshed.filter((s) => s.round === 1).map((s) => entriesById.get(s.id)!);
+  const round1Entries = refreshed.filter((s) => s.round === 1).map(entryFromRow);
   const existingRound2 = refreshed.filter((s) => s.round === 2);
 
   let round2Entries: SubTaskEntry[];
@@ -281,7 +274,7 @@ async function runWorkersStage(args: DispatchArgs): Promise<{ status: "completed
         preCompletedIds: completedIdsR2,
       });
     }
-    round2Entries = existingRound2.map((s) => entriesById.get(s.id)!);
+    round2Entries = existingRound2.map(entryFromRow);
   } else {
     const phaseResult = await runRefixPhase({
       storage: args.storage, taskId: args.taskRow.id,
