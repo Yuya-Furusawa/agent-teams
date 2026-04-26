@@ -4,7 +4,7 @@
 #   - installs workspace dependencies (pnpm)
 #   - builds all packages
 #   - exposes the `agent-teams` binary on PATH
-#   - links commands/team.md into ~/.claude/commands/
+#   - links commands/{team,team-ws,pbi,team-resume}.md into ~/.claude/commands/
 #   - creates ~/.agent-teams/ for task history
 #
 # Usage:
@@ -122,6 +122,7 @@ link_command() {
 link_command "$REPO_ROOT/commands/team.md" "team.md"
 link_command "$REPO_ROOT/commands/team-ws.md" "team-ws.md"
 link_command "$REPO_ROOT/commands/pbi.md" "pbi.md"
+link_command "$REPO_ROOT/commands/team-resume.md" "team-resume.md"
 
 step "creating data directories"
 run "mkdir -p \"$AGENT_TEAMS_HOME/tasks\""
@@ -149,6 +150,6 @@ usage:
 
 data directory:   $AGENT_TEAMS_HOME
 workspaces:       $AGENT_TEAMS_HOME/workspaces/
-slash commands:   $CLAUDE_COMMANDS_DIR/team.md, $CLAUDE_COMMANDS_DIR/team-ws.md, $CLAUDE_COMMANDS_DIR/pbi.md
+slash commands:   $CLAUDE_COMMANDS_DIR/team.md, $CLAUDE_COMMANDS_DIR/team-ws.md, $CLAUDE_COMMANDS_DIR/pbi.md, $CLAUDE_COMMANDS_DIR/team-resume.md
 cli linked at:    $AGENT_TEAMS_BIN_DIR/agent-teams$PATH_WARNING
 EOF
