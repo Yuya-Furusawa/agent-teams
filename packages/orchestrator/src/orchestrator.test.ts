@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTask } from "./orchestrator.js";
+import { runTask, DesignCheckpointReached } from "./orchestrator.js";
 import { parsePbiNumber } from "./pbi-input.js";
 import {
   __setAgentRunnerFactoryForTests as setPlannerFactory,
@@ -239,5 +239,19 @@ describe("runTask PBI number resolution", () => {
       else delete process.env.AGENT_TEAMS_AGENTS_DIR;
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("DesignCheckpointReached", () => {
+  it("carries the designer sub-task id and the checkpoint payload", () => {
+    const err = new DesignCheckpointReached({
+      designerSubTaskId: "sub-h",
+      checkpoint: { modified_files: ["a.pen"], summary: "s", preview_images: [] },
+      completedIds: new Set(["sub-h"]),
+    });
+    expect(err.designerSubTaskId).toBe("sub-h");
+    expect(err.checkpoint.modified_files).toEqual(["a.pen"]);
+    expect(err.completedIds.has("sub-h")).toBe(true);
+    expect(err).toBeInstanceOf(Error);
   });
 });

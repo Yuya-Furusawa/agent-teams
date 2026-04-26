@@ -27,6 +27,7 @@ import {
   resolveWorkspaceTeam,
 } from "./instance.js";
 import { runPlanner, runRefixPlanner, runSummarizer, runTriage } from "./planner-runner.js";
+import { parseDesignCheckpoint, type DesignCheckpoint } from "./checkpoint-parse.js";
 import type { SubTaskPlan } from "./planner-schema.js";
 import { loadPbiConfig } from "./pbi-config.js";
 import { buildPbiTaskDescription, parsePbiNumber } from "./pbi-input.js";
@@ -46,6 +47,23 @@ export interface SubTaskEntry {
   id: string;
   index: number;
   plan: SubTaskPlan;
+}
+
+export class DesignCheckpointReached extends Error {
+  readonly designerSubTaskId: string;
+  readonly checkpoint: DesignCheckpoint;
+  readonly completedIds: ReadonlySet<string>;
+  constructor(payload: {
+    designerSubTaskId: string;
+    checkpoint: DesignCheckpoint;
+    completedIds: ReadonlySet<string>;
+  }) {
+    super(`design checkpoint reached for sub-task ${payload.designerSubTaskId}`);
+    this.name = "DesignCheckpointReached";
+    this.designerSubTaskId = payload.designerSubTaskId;
+    this.checkpoint = payload.checkpoint;
+    this.completedIds = payload.completedIds;
+  }
 }
 
 const DEFAULT_MAX_PARALLEL = 3;
@@ -671,6 +689,10 @@ export async function runRoundDag(params: {
     });
   };
 
+  const completedIds = new Set<string>();
+  let designCheckpointPayload: DesignCheckpoint | null = null;
+  let designCheckpointId: string | null = null;
+
   await runDag(
     dagNodes,
     params.maxParallel,
@@ -707,10 +729,31 @@ export async function runRoundDag(params: {
       } finally {
         completed++;
         await reportProgress().catch(() => {});
+        completedIds.add(entry.id);
+
+        // Detect Hana's design checkpoint. Hana is the sole layer-0 node when
+        // present (enforced by validatePlanDag), so when this fires no other
+        // round-1 worker is in flight.
+        if (entry.plan.assignedAgent === "Hana") {
+          const report = readReport(params.taskId, entry.id) ?? "";
+          const checkpoint = parseDesignCheckpoint(report);
+          if (checkpoint && checkpoint.modified_files.length > 0) {
+            designCheckpointPayload = checkpoint;
+            designCheckpointId = entry.id;
+          }
+        }
       }
     },
     params.preCompletedIds ? { preCompletedIds: params.preCompletedIds } : undefined,
   );
+
+  if (designCheckpointPayload && designCheckpointId) {
+    throw new DesignCheckpointReached({
+      designerSubTaskId: designCheckpointId,
+      checkpoint: designCheckpointPayload,
+      completedIds,
+    });
+  }
 }
 
 async function finalizeWorkspaceStatus(
