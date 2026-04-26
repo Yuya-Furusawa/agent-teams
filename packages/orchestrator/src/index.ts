@@ -37,3 +37,8 @@ export {
   type ResumeTaskResult,
   type ResumeStage,
 } from "./resume-runner.js";
+export {
+  resumeDesignTask,
+  type ResumeDesignOptions,
+  type ResumeDesignResult,
+} from "./design-resume-runner.js";
