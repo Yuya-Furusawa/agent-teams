@@ -179,6 +179,45 @@ describe("resume_lock column migration", () => {
     expect(storage.readDesignState("t-design")).toEqual(state);
     storage.close();
   });
+
+  it("swapDependency replaces an old sub-task id inside depends_on JSON arrays", () => {
+    const storage = new Storage(dbFile);
+    storage.insertTask({
+      id: "tk", description: "d", cwd: "/w", team_name: "default",
+      status: "running", created_at: Date.now(),
+    });
+    storage.insertSubTask({
+      id: "hana-old", task_id: "tk", title: "design", prompt: "p",
+      assigned_agent: "Hana", status: "completed", created_at: Date.now(),
+      depends_on: null, round: 1,
+    });
+    storage.insertSubTask({
+      id: "impl-1", task_id: "tk", title: "build", prompt: "p",
+      assigned_agent: "Kai", status: "pending", created_at: Date.now(),
+      depends_on: JSON.stringify(["hana-old"]), round: 1,
+    });
+    storage.insertSubTask({
+      id: "impl-2", task_id: "tk", title: "build2", prompt: "p",
+      assigned_agent: "Aki", status: "pending", created_at: Date.now(),
+      depends_on: JSON.stringify(["hana-old", "other-id"]), round: 1,
+    });
+    storage.insertSubTask({
+      id: "unrelated", task_id: "tk", title: "x", prompt: "p",
+      assigned_agent: "Lin", status: "pending", created_at: Date.now(),
+      depends_on: JSON.stringify(["other-id"]), round: 1,
+    });
+
+    storage.swapDependency("tk", "hana-old", "hana-new");
+
+    const rows = storage.db
+      .prepare("SELECT id, depends_on FROM sub_tasks WHERE task_id = 'tk' ORDER BY id")
+      .all() as Array<{ id: string; depends_on: string | null }>;
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r.depends_on]));
+    expect(JSON.parse(byId["impl-1"]!)).toEqual(["hana-new"]);
+    expect(JSON.parse(byId["impl-2"]!)).toEqual(["hana-new", "other-id"]);
+    expect(JSON.parse(byId["unrelated"]!)).toEqual(["other-id"]);
+    storage.close();
+  });
 });
 
 describe("resume_lock and findResumableTaskId", () => {

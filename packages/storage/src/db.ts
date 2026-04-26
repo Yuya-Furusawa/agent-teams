@@ -198,6 +198,24 @@ export class Storage {
     return JSON.parse(row.design_state) as DesignState;
   }
 
+  /**
+   * Replaces every occurrence of `oldId` inside `sub_tasks.depends_on` JSON
+   * arrays for the given task with `newId`. Implemented as a substring REPLACE
+   * because (a) ULIDs are collision-resistant so accidental matches in other
+   * fields are negligible, and (b) at most one occurrence of any given Hana
+   * ULID is expected per row at swap time. Used after Hana is re-spawned via
+   * `design-resume --feedback` so downstream sub-tasks point at the new ULID.
+   */
+  swapDependency(taskId: string, oldId: string, newId: string): void {
+    this.db
+      .prepare(
+        `UPDATE sub_tasks
+         SET depends_on = REPLACE(depends_on, ?, ?)
+         WHERE task_id = ? AND depends_on LIKE ?`,
+      )
+      .run(oldId, newId, taskId, `%${oldId}%`);
+  }
+
   updateTaskStatus(id: string, status: TaskStatus, completedAt?: number | null): void {
     this.db
       .prepare(
