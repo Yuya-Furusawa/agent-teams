@@ -637,6 +637,7 @@ export async function runRoundDag(params: {
   maxParallel: number;
   workspace: WorkspaceRef | null;
   round: 1 | 2;
+  preCompletedIds?: ReadonlySet<string>;
 }): Promise<void> {
   const planIdToUlid = new Map<string, string>();
   for (const e of params.entries) planIdToUlid.set(e.plan.id, e.id);
@@ -661,41 +662,46 @@ export async function runRoundDag(params: {
     });
   };
 
-  await runDag(dagNodes, params.maxParallel, async (entry) => {
-    const runId = ulid();
-    params.storage.insertAgentRun({
-      id: runId,
-      sub_task_id: entry.id,
-      pane_ref: null,
-      pid: null,
-      started_at: Date.now(),
-    });
-    params.storage.updateSubTaskStatus(entry.id, "running");
-    const { workerCwd, targetRepo, peerRepos } = resolveWorkerScope(
-      params.ws,
-      entry.plan.targetRepo ?? undefined,
-      params.cwd,
-    );
-    try {
-      await runWorker({
-        taskId: params.taskId,
-        subTaskId: entry.id,
-        agent: entry.plan.assignedAgent,
-        originalTask: params.originalTaskDescription,
-        subTaskTitle: entry.plan.title,
-        subTaskPrompt: entry.plan.prompt,
-        ...(entry.plan.rationale ? { rationale: entry.plan.rationale } : {}),
-        cwd: workerCwd,
-        ...(params.team.defaults?.model ? { model: params.team.defaults.model } : {}),
-        inlineAgents: params.inlineAgents,
-        ...(targetRepo ? { targetRepo } : {}),
-        ...(peerRepos && peerRepos.length > 0 ? { peerRepos } : {}),
+  await runDag(
+    dagNodes,
+    params.maxParallel,
+    async (entry) => {
+      const runId = ulid();
+      params.storage.insertAgentRun({
+        id: runId,
+        sub_task_id: entry.id,
+        pane_ref: null,
+        pid: null,
+        started_at: Date.now(),
       });
-    } finally {
-      completed++;
-      await reportProgress().catch(() => {});
-    }
-  });
+      params.storage.updateSubTaskStatus(entry.id, "running");
+      const { workerCwd, targetRepo, peerRepos } = resolveWorkerScope(
+        params.ws,
+        entry.plan.targetRepo ?? undefined,
+        params.cwd,
+      );
+      try {
+        await runWorker({
+          taskId: params.taskId,
+          subTaskId: entry.id,
+          agent: entry.plan.assignedAgent,
+          originalTask: params.originalTaskDescription,
+          subTaskTitle: entry.plan.title,
+          subTaskPrompt: entry.plan.prompt,
+          ...(entry.plan.rationale ? { rationale: entry.plan.rationale } : {}),
+          cwd: workerCwd,
+          ...(params.team.defaults?.model ? { model: params.team.defaults.model } : {}),
+          inlineAgents: params.inlineAgents,
+          ...(targetRepo ? { targetRepo } : {}),
+          ...(peerRepos && peerRepos.length > 0 ? { peerRepos } : {}),
+        });
+      } finally {
+        completed++;
+        await reportProgress().catch(() => {});
+      }
+    },
+    params.preCompletedIds ? { preCompletedIds: params.preCompletedIds } : undefined,
+  );
 }
 
 async function finalizeWorkspaceStatus(
