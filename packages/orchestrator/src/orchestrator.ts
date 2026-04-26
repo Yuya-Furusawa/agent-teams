@@ -194,6 +194,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       eventsPath: join(taskDir(taskId), "planner-events.jsonl"),
       inlineAgents,
       ...(repos ? { repos } : {}),
+      roleOf,
     });
 
     if (workspace) {
@@ -417,6 +418,7 @@ export async function runRefixPhase(params: {
       eventsPath: join(taskDir(taskId), "refix-planner-events.jsonl"),
       inlineAgents,
       ...(repos ? { repos } : {}),
+      roleOf,
     });
 
     if (refixPlan.subTasks.length === 0) {

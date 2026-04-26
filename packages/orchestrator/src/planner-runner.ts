@@ -32,7 +32,10 @@ function getAgentRunner(): AgentRunnerLike {
   return agentRunnerFactory();
 }
 
-export function validatePlanDag(plan: TaskPlan): void {
+export function validatePlanDag(
+  plan: TaskPlan,
+  roleOf?: (agent: string) => string | undefined,
+): void {
   const ids = new Set<string>();
   for (const sub of plan.subTasks) {
     if (ids.has(sub.id)) {
@@ -49,6 +52,24 @@ export function validatePlanDag(plan: TaskPlan): void {
       }
       if (dep === sub.id) {
         throw new Error(`sub-task "${sub.id}" depends on itself`);
+      }
+    }
+  }
+  // Designer-layer-0 invariant: when a designer sub-task has dependsOn:[],
+  // every other sub-task in the plan must list it in dependsOn.
+  if (roleOf) {
+    const designerLayer0 = plan.subTasks.find(
+      (s) => roleOf(s.assignedAgent) === "designer" && (s.dependsOn ?? []).length === 0,
+    );
+    if (designerLayer0) {
+      for (const sub of plan.subTasks) {
+        if (sub.id === designerLayer0.id) continue;
+        if (!(sub.dependsOn ?? []).includes(designerLayer0.id)) {
+          throw new Error(
+            `sub-task "${sub.id}" must include designer "${designerLayer0.id}" in dependsOn ` +
+              `(designer-layer-0 invariant: every other sub-task must wait for the design checkpoint)`,
+          );
+        }
       }
     }
   }
@@ -169,6 +190,7 @@ export async function runPlanner(opts: {
   inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
   repos?: RepoInfo[];
+  roleOf?: (name: string) => string | undefined;
 }): Promise<TaskPlan> {
   const prompt = buildPlannerPrompt({
     task: opts.task,
@@ -208,7 +230,7 @@ export async function runPlanner(opts: {
 
   validatePlanRoster(parsed, opts.workers.map((w) => w.name));
 
-  validatePlanDag(parsed);
+  validatePlanDag(parsed, opts.roleOf);
 
   if (opts.repos && opts.repos.length > 0) {
     const repoNames = new Set(opts.repos.map((r) => r.name));
@@ -240,6 +262,7 @@ export async function runRefixPlanner(opts: {
   inlineAgents?: Record<string, InlineAgentDefinition>;
   onEvent?: (event: StreamJsonEvent) => void;
   repos?: RepoInfo[];
+  roleOf?: (name: string) => string | undefined;
 }): Promise<RefixPlan> {
   const prompt = buildRefixPlannerPrompt({
     task: opts.task,
@@ -281,7 +304,7 @@ export async function runRefixPlanner(opts: {
   if (parsed.subTasks.length === 0) return parsed;
 
   validatePlanRoster(parsed, opts.allowedAssignees);
-  validatePlanDag(parsed);
+  validatePlanDag(parsed, opts.roleOf);
 
   if (opts.repos && opts.repos.length > 0) {
     const repoNames = new Set(opts.repos.map((r) => r.name));
