@@ -80,4 +80,68 @@ describe("resumeTask integration", () => {
     expect(resumed.stage).toBe("workers");
     expect(existsSync(resumed.summaryPath)).toBe(true);
   });
+
+  it("resumes from triage when triage failed (no sub_tasks in DB)", async () => {
+    let triageAttempts = 0;
+    setPlannerFactory(() => ({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async run(opts: any) {
+        // First triage call fails; subsequent triage / planner / summarizer succeed.
+        if (/TRIAGE mode/.test(opts.prompt)) {
+          triageAttempts++;
+          if (triageAttempts === 1) throw new Error("simulated triage failure");
+          return { exitCode: 0, parsedJson: { difficulty: "small", selectedAgents: ["Kai"] },
+                   lastText: '{"difficulty":"small","selectedAgents":["Kai"]}' };
+        }
+        if (/planner for a team of coding agents/.test(opts.prompt)) {
+          return { exitCode: 0, parsedJson: {
+            overallStrategy: "one impl",
+            subTasks: [{ id: "p1", title: "x", prompt: "p", assignedAgent: "Kai" }],
+          }, lastText: "{}" };
+        }
+        if (/summari/i.test(opts.prompt)) {
+          return { exitCode: 0, parsedJson: { summary: "ok" }, lastText: "{}" };
+        }
+        throw new Error(`no fake response for: ${(opts.prompt as string).slice(0, 200)}`);
+      },
+    }) as never);
+    setWorkerFactory(() => ({
+      async run() { return { exitCode: 0, parsedJson: null, lastText: "ok" }; },
+    }) as never);
+
+    await runTask({ description: "do thing", cwd: tmp }).catch(() => null);
+    const resumed = await resumeTask();
+    expect(resumed.status).toBe("completed");
+    expect(resumed.stage).toBe("triage");
+  });
+
+  it("rejects a second resume while a first holds the lock", async () => {
+    // Pre-seed a failed task and acquire a fake lock on it directly.
+    const { Storage } = await import("@agent-teams/storage");
+    const s = new Storage();
+    s.insertTask({
+      id: "t-locked", description: "d", cwd: tmp, team_name: "test",
+      status: "failed", created_at: Date.now(),
+    });
+    // Hold the lock with a synthetic pid different from process.pid.
+    s.acquireResumeLock(
+      "t-locked",
+      { pid: process.pid + 12345, host: "other-host", started_at: Date.now() },
+      30 * 60 * 1000,
+    );
+    s.close();
+    await expect(resumeTask({ taskId: "t-locked" })).rejects.toThrow(/locked by another process/);
+  });
+
+  it("rejects PBI tasks (pbi_state IS NOT NULL) when explicitly targeted", async () => {
+    const { Storage } = await import("@agent-teams/storage");
+    const s = new Storage();
+    s.insertTask({
+      id: "t-pbi", description: "PBI draft", cwd: tmp, team_name: "test",
+      status: "running", created_at: Date.now(),
+      pbi_state: { stage: "draft", pbiId: 42 },
+    });
+    s.close();
+    await expect(resumeTask({ taskId: "t-pbi" })).rejects.toThrow(/pbi-resume/);
+  });
 });
