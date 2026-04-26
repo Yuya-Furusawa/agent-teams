@@ -215,12 +215,20 @@ export interface RepoInfo {
   name: string;
   path: string;
   role?: string;
+  designFiles?: string[];
 }
 
 function reposSection(repos: RepoInfo[] | undefined): string {
   if (!repos || repos.length === 0) return "";
   const list = repos
-    .map((r) => `- ${r.name}: ${r.path}${r.role ? ` — ${r.role}` : ""}`)
+    .map((r) => {
+      const role = r.role ? ` — ${r.role}` : "";
+      const design =
+        r.designFiles && r.designFiles.length > 0
+          ? ` — design files: ${r.designFiles.join(", ")}`
+          : "";
+      return `- ${r.name}: ${r.path}${role}${design}`;
+    })
     .join("\n");
   return `\n\n# Repos (workspace mode)\n${list}`;
 }

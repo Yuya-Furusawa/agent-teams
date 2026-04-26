@@ -5,6 +5,7 @@ import {
   buildRefixPlannerPrompt,
   buildRefixWorkerPrompt,
   buildSummaryPrompt,
+  buildTriagePrompt,
 } from "./planner-schema.js";
 
 describe("TaskPlanSchema targetRepo", () => {
@@ -142,5 +143,31 @@ describe("buildSummaryPrompt (round-aware)", () => {
     });
     expect(p).toContain("[round 1]");
     expect(p).toContain("[round 2]");
+  });
+});
+
+describe("triage prompt — design files surface", () => {
+  it("includes 'design files: ...' when a repo has designFiles", () => {
+    const prompt = buildTriagePrompt({
+      task: "redesign login",
+      cwd: "/abs",
+      roster: [{ name: "Hana", role: "designer" }],
+      repos: [
+        { name: "fe", path: "/abs/fe", role: "React SPA", designFiles: ["design/login.pen", "design/signup.pen"] },
+        { name: "be", path: "/abs/be", role: "Rails API" },
+      ],
+    });
+    expect(prompt).toContain("fe: /abs/fe — React SPA — design files: design/login.pen, design/signup.pen");
+    expect(prompt).toContain("be: /abs/be — Rails API");
+  });
+
+  it("omits 'design files:' segment when designFiles is empty / absent", () => {
+    const prompt = buildTriagePrompt({
+      task: "x",
+      cwd: "/abs",
+      roster: [{ name: "Sage" }],
+      repos: [{ name: "fe", path: "/abs/fe", role: "React SPA" }],
+    });
+    expect(prompt).not.toContain("design files:");
   });
 });
