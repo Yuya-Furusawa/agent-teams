@@ -360,4 +360,10 @@ export class Storage {
       .prepare(`SELECT * FROM sub_tasks WHERE task_id = ? ORDER BY created_at ASC`)
       .all(taskId) as SubTaskRow[];
   }
+
+  getSubTask(id: string): SubTaskRow | undefined {
+    return this.db
+      .prepare(`SELECT * FROM sub_tasks WHERE id = ?`)
+      .get(id) as SubTaskRow | undefined;
+  }
 }

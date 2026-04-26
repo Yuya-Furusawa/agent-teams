@@ -58,6 +58,27 @@ describe("Storage migration", () => {
     expect(row.round).toBe(2);
     storage.close();
   });
+
+  it("getSubTask returns the full row by id (or undefined when missing)", () => {
+    const storage = new Storage(dbFile);
+    storage.insertTask({
+      id: "t1", description: "d", cwd: "/w", team_name: "default",
+      status: "running", created_at: 100,
+    });
+    storage.insertSubTask({
+      id: "sub-x", task_id: "t1", title: "T", prompt: "P",
+      assigned_agent: "Hana", status: "completed", created_at: 200,
+      target_repo: "fe", depends_on: null, round: 1,
+    });
+    const row = storage.getSubTask("sub-x");
+    expect(row?.id).toBe("sub-x");
+    expect(row?.task_id).toBe("t1");
+    expect(row?.assigned_agent).toBe("Hana");
+    expect(row?.target_repo).toBe("fe");
+    expect(row?.round).toBe(1);
+    expect(storage.getSubTask("missing")).toBeUndefined();
+    storage.close();
+  });
 });
 
 describe("PBI state column", () => {
