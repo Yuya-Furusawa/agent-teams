@@ -134,6 +134,24 @@ describe("resume_lock column migration", () => {
     expect(row.resume_lock).toBeNull();
     storage.close();
   });
+
+  it("adds design_state column to legacy DB and defaults existing rows to NULL", () => {
+    const legacy = new Database(dbFile);
+    legacy.exec(`
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, description TEXT NOT NULL, cwd TEXT NOT NULL,
+        team_name TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, completed_at INTEGER);
+      INSERT INTO tasks VALUES ('t1','d','/w','default','running',100,NULL);
+    `);
+    legacy.close();
+    const storage = new Storage(dbFile);
+    const cols = storage.db.pragma("table_info(tasks)") as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("design_state");
+    const row = storage.db
+      .prepare("SELECT design_state FROM tasks WHERE id = 't1'")
+      .get() as { design_state: string | null };
+    expect(row.design_state).toBeNull();
+    storage.close();
+  });
 });
 
 describe("resume_lock and findResumableTaskId", () => {

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   workspace_name TEXT,
   repos TEXT,
   pbi_state TEXT,
+  design_state TEXT,
   resume_lock TEXT
 );
 
@@ -119,6 +120,9 @@ export class Storage {
     }
     if (!taskColNames.has("pbi_state")) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN pbi_state TEXT`);
+    }
+    if (!taskColNames.has("design_state")) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN design_state TEXT`);
     }
     if (!taskColNames.has("resume_lock")) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN resume_lock TEXT`);
