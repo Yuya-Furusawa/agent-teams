@@ -1,15 +1,35 @@
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
+import { join as joinPath } from "node:path";
 import {
   Storage,
+  eventsFile,
+  reportFile,
+  rotateBackup,
   summaryFile,
   type ResumeLock,
   type SubTaskRow,
   type TaskRow,
 } from "@agent-teams/storage";
+import type { InlineAgentDefinition } from "@agent-teams/agent-runner";
 import { loadAgentRegistry } from "./agent-registry.js";
-import { resolveTeam, resolveWorkspaceTeam } from "./instance.js";
-import { loadTeam } from "./team.js";
+import {
+  buildInstanceInlineAgents,
+  resolvePlannerInstance,
+  resolveTeam,
+  resolveWorkspaceTeam,
+} from "./instance.js";
+import {
+  prepareRound,
+  runRefixPhase,
+  runRoundDag,
+  runSummaryPhase,
+  taskDir,
+  type SubTaskEntry,
+} from "./orchestrator.js";
+import { runPlanner, runTriage } from "./planner-runner.js";
+import { loadTeam, type Team } from "./team.js";
+import { loadWorkspace, type Workspace } from "./workspace.js";
 
 export type ResumeStage = "triage" | "workers" | "refix-planning" | "summarizer" | "noop";
 
@@ -131,6 +151,38 @@ function detectStage(
   return determineResumeStage(subTasks, summaryExists, (n) => byName.get(n));
 }
 
+interface StageContext {
+  team: Team;
+  ws: Workspace | undefined;
+  cwd: string;
+  workerInstances: ReturnType<typeof resolveTeam>;
+  plannerName: string;
+  inlineAgents: Record<string, InlineAgentDefinition>;
+  roleOf: (n: string) => string | undefined;
+  maxParallel: number;
+  repos: Workspace["repos"] | undefined;
+}
+
+async function loadStageContext(task: TaskRow): Promise<StageContext> {
+  const registry = loadAgentRegistry();
+  const ws = task.workspace_name ? loadWorkspace(task.workspace_name) : undefined;
+  const team = ws
+    ? resolveWorkspaceTeam(ws.name, registry)
+    : loadTeam(`${task.cwd}/agent-team.yaml`);
+  const workerInstances = resolveTeam(team, registry);
+  const plannerInstance = resolvePlannerInstance(team, registry);
+  const inlineAgents = buildInstanceInlineAgents([...workerInstances, plannerInstance]);
+  const byName = new Map(workerInstances.map((i) => [i.name, i.role]));
+  const roleOf = (n: string) => byName.get(n);
+  const cwd = ws ? ws.repos[0]!.path : task.cwd;
+  const maxParallel = team.defaults?.maxParallel ?? 3;
+  return {
+    team, ws, cwd, workerInstances, plannerName: plannerInstance.name,
+    inlineAgents, roleOf, maxParallel,
+    repos: ws ? ws.repos : undefined,
+  };
+}
+
 interface DispatchArgs {
   stage: ResumeStage;
   taskRow: TaskRow;
@@ -145,13 +197,232 @@ async function dispatchStage(args: DispatchArgs): Promise<{ status: "completed" 
         `task ${args.taskRow.id}: state already completed; status corrected to 'completed'\n`,
       );
       return { status: "completed" };
-    case "summarizer":
-      throw new Error("summarizer stage: not implemented yet (Task 2.6)");
-    case "refix-planning":
-      throw new Error("refix-planning stage: not implemented yet (Task 2.6)");
-    case "workers":
-      throw new Error("workers stage: not implemented yet (Task 2.6)");
-    case "triage":
-      throw new Error("triage stage: not implemented yet (Task 2.6)");
+    case "summarizer":   return runSummarizerStage(args);
+    case "refix-planning": return runRefixStage(args);
+    case "workers":      return runWorkersStage(args);
+    case "triage":       return runTriageStage(args);
   }
+}
+
+async function runWorkersStage(args: DispatchArgs): Promise<{ status: "completed" | "failed" }> {
+  const ctx = await loadStageContext(args.taskRow);
+
+  const incomplete = args.subTasks.filter((s) => s.status !== "completed");
+  const completedIds = new Set(args.subTasks.filter((s) => s.status === "completed").map((s) => s.id));
+
+  // Backup events.jsonl + report.md before retry, then mark sub-tasks 'pending'.
+  for (const s of incomplete) {
+    rotateBackup(eventsFile(args.taskRow.id, s.id), 3);
+    rotateBackup(reportFile(args.taskRow.id, s.id), 3);
+    args.storage.updateSubTaskStatus(s.id, "pending");
+  }
+
+  // Build SubTaskEntry shape from DB rows. depends_on already stores ULIDs.
+  const entriesById = new Map<string, SubTaskEntry>();
+  for (const s of args.subTasks) {
+    const deps = s.depends_on ? (JSON.parse(s.depends_on) as string[]) : [];
+    entriesById.set(s.id, {
+      id: s.id, index: 0,
+      plan: {
+        id: s.id, title: s.title, prompt: s.prompt,
+        assignedAgent: s.assigned_agent,
+        ...(s.target_repo ? { targetRepo: s.target_repo } : {}),
+        dependsOn: deps,
+      },
+    });
+  }
+
+  // Spec calls for a single runDag with preCompletedIds, but we split per-round
+  // because runRoundDag carries round-specific status text (the GUI shows
+  // "0/N done" vs. "refix 0/N done"). The cost is two cycles of acquire/release
+  // when both rounds need work, which is rare enough to not matter in practice.
+  const round1Incomplete = incomplete.filter((s) => s.round === 1).map((s) => entriesById.get(s.id)!);
+  const round2Incomplete = incomplete.filter((s) => s.round === 2).map((s) => entriesById.get(s.id)!);
+
+  if (round1Incomplete.length > 0) {
+    await runRoundDag({
+      entries: round1Incomplete,
+      storage: args.storage,
+      taskId: args.taskRow.id,
+      ws: ctx.ws,
+      cwd: ctx.cwd,
+      team: ctx.team,
+      inlineAgents: ctx.inlineAgents,
+      originalTaskDescription: args.taskRow.description,
+      maxParallel: ctx.maxParallel,
+      workspace: null,
+      round: 1,
+      preCompletedIds: completedIds,
+    });
+  }
+
+  // After round 1 retry, rebuild round1Entries (full list) for the refix decision.
+  const refreshed = args.storage.listSubTasks(args.taskRow.id);
+  const round1Entries = refreshed.filter((s) => s.round === 1).map((s) => entriesById.get(s.id)!);
+  const existingRound2 = refreshed.filter((s) => s.round === 2);
+
+  let round2Entries: SubTaskEntry[];
+  let refixSkipReason: string | undefined;
+  if (existingRound2.length > 0) {
+    if (round2Incomplete.length > 0) {
+      const completedIdsR2 = new Set(refreshed.filter((s) => s.status === "completed").map((s) => s.id));
+      await runRoundDag({
+        entries: round2Incomplete,
+        storage: args.storage,
+        taskId: args.taskRow.id,
+        ws: ctx.ws,
+        cwd: ctx.cwd,
+        team: ctx.team,
+        inlineAgents: ctx.inlineAgents,
+        originalTaskDescription: args.taskRow.description,
+        maxParallel: ctx.maxParallel,
+        workspace: null,
+        round: 2,
+        preCompletedIds: completedIdsR2,
+      });
+    }
+    round2Entries = existingRound2.map((s) => entriesById.get(s.id)!);
+  } else {
+    const phaseResult = await runRefixPhase({
+      storage: args.storage, taskId: args.taskRow.id,
+      description: args.taskRow.description, cwd: ctx.cwd,
+      team: ctx.team, ws: ctx.ws, workspace: null,
+      inlineAgents: ctx.inlineAgents,
+      plannerAgentName: ctx.plannerName,
+      round1Entries, roleOf: ctx.roleOf,
+      maxParallel: ctx.maxParallel, repos: ctx.repos,
+    });
+    round2Entries = phaseResult.round2Entries;
+    refixSkipReason = phaseResult.refixSkipReason;
+  }
+
+  const summary = await runSummaryPhase({
+    storage: args.storage, taskId: args.taskRow.id,
+    description: args.taskRow.description, cwd: ctx.cwd,
+    team: ctx.team, inlineAgents: ctx.inlineAgents,
+    plannerAgentName: ctx.plannerName,
+    round1Entries, round2Entries,
+    roleOf: ctx.roleOf, refixSkipReason, repos: ctx.repos,
+  });
+  return { status: summary.status };
+}
+
+async function runRefixStage(args: DispatchArgs): Promise<{ status: "completed" | "failed" }> {
+  // All round 1 are completed; run refix-planning + round 2 + summarizer.
+  const ctx = await loadStageContext(args.taskRow);
+  const round1Entries = args.subTasks.filter((s) => s.round === 1).map((s) => entryFromRow(s));
+
+  const phaseResult = await runRefixPhase({
+    storage: args.storage, taskId: args.taskRow.id,
+    description: args.taskRow.description, cwd: ctx.cwd,
+    team: ctx.team, ws: ctx.ws, workspace: null,
+    inlineAgents: ctx.inlineAgents,
+    plannerAgentName: ctx.plannerName,
+    round1Entries, roleOf: ctx.roleOf,
+    maxParallel: ctx.maxParallel, repos: ctx.repos,
+  });
+
+  const summary = await runSummaryPhase({
+    storage: args.storage, taskId: args.taskRow.id,
+    description: args.taskRow.description, cwd: ctx.cwd,
+    team: ctx.team, inlineAgents: ctx.inlineAgents,
+    plannerAgentName: ctx.plannerName,
+    round1Entries, round2Entries: phaseResult.round2Entries,
+    roleOf: ctx.roleOf,
+    refixSkipReason: phaseResult.refixSkipReason,
+    repos: ctx.repos,
+  });
+  return { status: summary.status };
+}
+
+async function runSummarizerStage(args: DispatchArgs): Promise<{ status: "completed" | "failed" }> {
+  const ctx = await loadStageContext(args.taskRow);
+  const round1Entries = args.subTasks.filter((s) => s.round === 1).map((s) => entryFromRow(s));
+  const round2Entries = args.subTasks.filter((s) => s.round === 2).map((s) => entryFromRow(s));
+  const summary = await runSummaryPhase({
+    storage: args.storage, taskId: args.taskRow.id,
+    description: args.taskRow.description, cwd: ctx.cwd,
+    team: ctx.team, inlineAgents: ctx.inlineAgents,
+    plannerAgentName: ctx.plannerName,
+    round1Entries, round2Entries,
+    roleOf: ctx.roleOf,
+    refixSkipReason: undefined,
+    repos: ctx.repos,
+  });
+  return { status: summary.status };
+}
+
+async function runTriageStage(args: DispatchArgs): Promise<{ status: "completed" | "failed" }> {
+  // Sub-tasks empty: re-run from triage. Body is essentially runTask minus the
+  // initial insertTask + the leading PBI parse (already resolved before).
+  const ctx = await loadStageContext(args.taskRow);
+  args.storage.updateTaskStatus(args.taskRow.id, "planning");
+
+  const triage = await runTriage({
+    task: args.taskRow.description, cwd: ctx.cwd, team: ctx.team,
+    plannerAgentName: ctx.plannerName,
+    roster: ctx.workerInstances.map((i) => ({ name: i.name, role: i.role, description: i.description })),
+    eventsPath: joinPath(taskDir(args.taskRow.id), "triage-events.jsonl"),
+    inlineAgents: ctx.inlineAgents,
+    ...(ctx.repos ? { repos: ctx.repos } : {}),
+  });
+
+  const selectedSet = new Set(triage.selectedAgents);
+  const selected = ctx.workerInstances.filter((i) => selectedSet.has(i.name));
+  if (selected.length === 0) throw new Error("triage selected no agents");
+
+  const plan = await runPlanner({
+    task: args.taskRow.description, cwd: ctx.cwd, team: ctx.team,
+    plannerAgentName: ctx.plannerName,
+    workers: selected.map((i) => ({ name: i.name, role: i.role, description: i.description })),
+    difficulty: triage.difficulty,
+    ...(triage.rationale ? { triageRationale: triage.rationale } : {}),
+    eventsPath: joinPath(taskDir(args.taskRow.id), "planner-events.jsonl"),
+    inlineAgents: ctx.inlineAgents,
+    ...(ctx.repos ? { repos: ctx.repos } : {}),
+  });
+
+  const round1Entries = prepareRound({ storage: args.storage, taskId: args.taskRow.id, plan, round: 1 });
+  args.storage.updateTaskStatus(args.taskRow.id, "running");
+
+  await runRoundDag({
+    entries: round1Entries,
+    storage: args.storage, taskId: args.taskRow.id,
+    ws: ctx.ws, cwd: ctx.cwd, team: ctx.team,
+    inlineAgents: ctx.inlineAgents,
+    originalTaskDescription: args.taskRow.description,
+    maxParallel: ctx.maxParallel, workspace: null, round: 1,
+  });
+
+  const refix = await runRefixPhase({
+    storage: args.storage, taskId: args.taskRow.id,
+    description: args.taskRow.description, cwd: ctx.cwd,
+    team: ctx.team, ws: ctx.ws, workspace: null,
+    inlineAgents: ctx.inlineAgents, plannerAgentName: ctx.plannerName,
+    round1Entries, roleOf: ctx.roleOf, maxParallel: ctx.maxParallel,
+    repos: ctx.repos,
+  });
+
+  const summary = await runSummaryPhase({
+    storage: args.storage, taskId: args.taskRow.id,
+    description: args.taskRow.description, cwd: ctx.cwd,
+    team: ctx.team, inlineAgents: ctx.inlineAgents,
+    plannerAgentName: ctx.plannerName,
+    round1Entries, round2Entries: refix.round2Entries,
+    roleOf: ctx.roleOf, refixSkipReason: refix.refixSkipReason,
+    repos: ctx.repos,
+  });
+  return { status: summary.status };
+}
+
+function entryFromRow(s: SubTaskRow): SubTaskEntry {
+  return {
+    id: s.id, index: 0,
+    plan: {
+      id: s.id, title: s.title, prompt: s.prompt,
+      assignedAgent: s.assigned_agent,
+      ...(s.target_repo ? { targetRepo: s.target_repo } : {}),
+      dependsOn: s.depends_on ? (JSON.parse(s.depends_on) as string[]) : [],
+    },
+  };
 }
