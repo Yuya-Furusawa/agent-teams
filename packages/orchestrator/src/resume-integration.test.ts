@@ -53,7 +53,7 @@ describe("resumeTask integration", () => {
       { test: (p) => /planner for a team of coding agents/.test(p),
         json: {
           overallStrategy: "one impl",
-          subTasks: [{ id: "p1", title: "do x", prompt: "implement x", assignedAgent: "Kai" }],
+          subTasks: [{ id: "p1", title: "do x", prompt: "implement x", assignedAgent: "Kai", targetRepo: "(local)" }],
         } },
       // Summarizer prompt mentions "summarizer".
       { test: (p) => /summari/i.test(p),
@@ -96,7 +96,7 @@ describe("resumeTask integration", () => {
         if (/planner for a team of coding agents/.test(opts.prompt)) {
           return { exitCode: 0, parsedJson: {
             overallStrategy: "one impl",
-            subTasks: [{ id: "p1", title: "x", prompt: "p", assignedAgent: "Kai" }],
+            subTasks: [{ id: "p1", title: "x", prompt: "p", assignedAgent: "Kai", targetRepo: "(local)" }],
           }, lastText: "{}" };
         }
         if (/summari/i.test(opts.prompt)) {

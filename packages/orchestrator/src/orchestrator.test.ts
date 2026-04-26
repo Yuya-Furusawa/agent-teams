@@ -87,8 +87,8 @@ describe("runTask with refix phase", () => {
           json: {
             overallStrategy: "one impl + one reviewer",
             subTasks: [
-              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai" },
-              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", dependsOn: ["impl"] },
+              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai", targetRepo: "(local)" },
+              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", targetRepo: "(local)", dependsOn: ["impl"] },
             ],
           },
         },
@@ -129,8 +129,8 @@ describe("runTask with refix phase", () => {
           json: {
             overallStrategy: "impl + review",
             subTasks: [
-              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai" },
-              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", dependsOn: ["impl"] },
+              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai", targetRepo: "(local)" },
+              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", targetRepo: "(local)", dependsOn: ["impl"] },
             ],
           },
         },
@@ -139,8 +139,8 @@ describe("runTask with refix phase", () => {
           json: {
             overallStrategy: "Iris raised a must-fix on null check.",
             subTasks: [
-              { id: "refix-kai", title: "Fix null check", prompt: "fix it", assignedAgent: "Kai" },
-              { id: "rereview", title: "Re-review", prompt: "verify", assignedAgent: "Iris", dependsOn: ["refix-kai"] },
+              { id: "refix-kai", title: "Fix null check", prompt: "fix it", assignedAgent: "Kai", targetRepo: "(local)" },
+              { id: "rereview", title: "Re-review", prompt: "verify", assignedAgent: "Iris", targetRepo: "(local)", dependsOn: ["refix-kai"] },
             ],
           },
         },
@@ -187,7 +187,7 @@ describe("runTask with refix phase", () => {
           exitCode: 0,
           parsedJson: {
             overallStrategy: "one impl",
-            subTasks: [{ id: "impl", title: "Do", prompt: "p", assignedAgent: "Kai" }],
+            subTasks: [{ id: "impl", title: "Do", prompt: "p", assignedAgent: "Kai", targetRepo: "(local)" }],
           },
           lastText: "",
         };

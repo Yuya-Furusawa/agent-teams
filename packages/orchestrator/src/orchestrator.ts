@@ -35,6 +35,7 @@ import { loadTeam, validateTeamAgainstRegistry, type Team } from "./team.js";
 import { runWorker } from "./worker-runner.js";
 import {
   loadWorkspace,
+  scanDesignFiles,
   workspaceRepoByName,
   type Repo,
   type Workspace,
@@ -100,7 +101,13 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   const inlineAgents = buildInstanceInlineAgents([...workerInstances, plannerInstance]);
   const roleOf = (name: string): string | undefined =>
     instancesByName.get(name)?.role;
-  const repos = ws?.repos;
+  // Pre-scan target repos (or the local cwd in single-repo mode) for `.pen`
+  // design files. The result feeds the triage/planner prompts so Sage knows
+  // when to include Hana. Always pass the scanned list — single-repo mode
+  // uses a synthetic "(local)" entry so the same surface works in both modes.
+  const baseRepos: Repo[] = ws?.repos ?? [{ name: "(local)", path: cwd, role: "" }];
+  const reposWithDesign = scanDesignFiles(baseRepos);
+  const repos = reposWithDesign;
 
   const storage = new Storage();
   const taskId = ulid();
