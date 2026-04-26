@@ -41,6 +41,20 @@ export interface ResumeLock {
   started_at: number;
 }
 
+export interface DesignCheckpointSnapshot {
+  modified_files: string[];
+  summary: string;
+  preview_images: string[];
+}
+
+export interface DesignState {
+  phase: "awaiting_design_approval" | "approved";
+  designer_sub_task_id: string;
+  iteration: number;
+  completed_sub_task_ids: string[];
+  last_checkpoint: DesignCheckpointSnapshot;
+}
+
 export interface AgentRunRow {
   id: string;
   sub_task_id: string;
@@ -168,6 +182,20 @@ export class Storage {
 
   updatePbiState(id: string, state: Record<string, unknown>): void {
     this.db.prepare(`UPDATE tasks SET pbi_state = ? WHERE id = ?`).run(JSON.stringify(state), id);
+  }
+
+  updateDesignState(id: string, state: DesignState): void {
+    this.db
+      .prepare(`UPDATE tasks SET design_state = ? WHERE id = ?`)
+      .run(JSON.stringify(state), id);
+  }
+
+  readDesignState(id: string): DesignState | null {
+    const row = this.db
+      .prepare(`SELECT design_state FROM tasks WHERE id = ?`)
+      .get(id) as { design_state: string | null } | undefined;
+    if (!row || !row.design_state) return null;
+    return JSON.parse(row.design_state) as DesignState;
   }
 
   updateTaskStatus(id: string, status: TaskStatus, completedAt?: number | null): void {

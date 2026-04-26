@@ -152,6 +152,33 @@ describe("resume_lock column migration", () => {
     expect(row.design_state).toBeNull();
     storage.close();
   });
+
+  it("round-trips design_state via updateDesignState and readDesignState", () => {
+    const storage = new Storage(dbFile);
+    storage.insertTask({
+      id: "t-design",
+      description: "d",
+      cwd: "/w",
+      team_name: "default",
+      status: "running",
+      created_at: Date.now(),
+    });
+    expect(storage.readDesignState("t-design")).toBeNull();
+    const state = {
+      phase: "awaiting_design_approval" as const,
+      designer_sub_task_id: "sub-1",
+      iteration: 1,
+      completed_sub_task_ids: ["sub-1"],
+      last_checkpoint: {
+        modified_files: ["login.pen"],
+        summary: "ok",
+        preview_images: [],
+      },
+    };
+    storage.updateDesignState("t-design", state);
+    expect(storage.readDesignState("t-design")).toEqual(state);
+    storage.close();
+  });
 });
 
 describe("resume_lock and findResumableTaskId", () => {
