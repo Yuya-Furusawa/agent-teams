@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { listWorkspaces, loadWorkspace, runTask, runPbiTask, resumePbiTask, resumeTask } from "@agent-teams/orchestrator";
+import { listWorkspaces, loadWorkspace, runTask, runPbiTask, resumePbiTask, resumeTask, resumeDesignTask } from "@agent-teams/orchestrator";
 import type { ResumeStage } from "@agent-teams/orchestrator";
 import { Command } from "commander";
 
@@ -38,9 +38,19 @@ program
           ...(options.team ? { teamPath: options.team } : {}),
           ...(options.workspace ? { workspace: options.workspace } : {}),
         });
+        // TASK_ID line is emitted first (and unconditionally) so the parent
+        // /team Claude session can grep one line to learn which task it just
+        // ran — needed by the design-resume bridge in commands/team.md.
+        console.log(`TASK_ID: ${result.taskId}`);
         console.log(`task: ${result.taskId}`);
         console.log(`status: ${result.status}`);
         console.log(`summary: ${result.summaryPath}`);
+        // awaiting_user_input means the orchestrator already wrote
+        // STATUS / TASK_ID / ITERATION / json block to stdout. Treat as success
+        // exit code so the wrapping shell doesn't treat the pause as failure.
+        if (result.status === "awaiting_user_input") {
+          process.exit(0);
+        }
         process.exit(result.status === "completed" ? 0 : 2);
       } catch (err) {
         console.error(`agent-teams run failed: ${(err as Error).message}`);
@@ -146,6 +156,45 @@ program
       process.exit(result.status === "completed" ? 0 : 2);
     } catch (err) {
       console.error(`agent-teams resume failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("design-resume")
+  .description("Approve or send feedback for a task awaiting a Hana design checkpoint")
+  .argument("<task_id>", "Task id to resume")
+  .option("--approve", "Approve the current design and continue the task")
+  .option("--feedback <text>", "Re-run Hana with the given feedback")
+  .action(async (
+    taskId: string,
+    options: { approve?: boolean; feedback?: string },
+  ) => {
+    if (!options.approve && !options.feedback) {
+      console.error("error: design-resume requires either --approve or --feedback");
+      process.exit(1);
+    }
+    if (options.approve && options.feedback) {
+      console.error("error: --approve and --feedback are mutually exclusive");
+      process.exit(1);
+    }
+    try {
+      const result = await resumeDesignTask({
+        taskId,
+        ...(options.approve ? { approve: true } : {}),
+        ...(options.feedback ? { feedback: options.feedback } : {}),
+      });
+      console.log(`task: ${result.taskId}`);
+      console.log(`status: ${result.status}`);
+      console.log(`iteration: ${result.iteration}`);
+      if (result.summaryPath) console.log(`summary: ${result.summaryPath}`);
+      if (result.status === "awaiting_user_input") {
+        // Same convention as `run`: pause is success exit, not failure.
+        process.exit(0);
+      }
+      process.exit(result.status === "failed" ? 2 : 0);
+    } catch (err) {
+      console.error(`agent-teams design-resume failed: ${(err as Error).message}`);
       process.exit(1);
     }
   });

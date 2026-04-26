@@ -41,6 +41,20 @@ export interface ResumeLock {
   started_at: number;
 }
 
+export interface DesignCheckpointSnapshot {
+  modified_files: string[];
+  summary: string;
+  preview_images: string[];
+}
+
+export interface DesignState {
+  phase: "awaiting_design_approval" | "approved";
+  designer_sub_task_id: string;
+  iteration: number;
+  completed_sub_task_ids: string[];
+  last_checkpoint: DesignCheckpointSnapshot;
+}
+
 export interface AgentRunRow {
   id: string;
   sub_task_id: string;
@@ -66,6 +80,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   workspace_name TEXT,
   repos TEXT,
   pbi_state TEXT,
+  design_state TEXT,
   resume_lock TEXT
 );
 
@@ -120,6 +135,9 @@ export class Storage {
     if (!taskColNames.has("pbi_state")) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN pbi_state TEXT`);
     }
+    if (!taskColNames.has("design_state")) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN design_state TEXT`);
+    }
     if (!taskColNames.has("resume_lock")) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN resume_lock TEXT`);
     }
@@ -164,6 +182,38 @@ export class Storage {
 
   updatePbiState(id: string, state: Record<string, unknown>): void {
     this.db.prepare(`UPDATE tasks SET pbi_state = ? WHERE id = ?`).run(JSON.stringify(state), id);
+  }
+
+  updateDesignState(id: string, state: DesignState): void {
+    this.db
+      .prepare(`UPDATE tasks SET design_state = ? WHERE id = ?`)
+      .run(JSON.stringify(state), id);
+  }
+
+  readDesignState(id: string): DesignState | null {
+    const row = this.db
+      .prepare(`SELECT design_state FROM tasks WHERE id = ?`)
+      .get(id) as { design_state: string | null } | undefined;
+    if (!row || !row.design_state) return null;
+    return JSON.parse(row.design_state) as DesignState;
+  }
+
+  /**
+   * Replaces every occurrence of `oldId` inside `sub_tasks.depends_on` JSON
+   * arrays for the given task with `newId`. Implemented as a substring REPLACE
+   * because (a) ULIDs are collision-resistant so accidental matches in other
+   * fields are negligible, and (b) at most one occurrence of any given Hana
+   * ULID is expected per row at swap time. Used after Hana is re-spawned via
+   * `design-resume --feedback` so downstream sub-tasks point at the new ULID.
+   */
+  swapDependency(taskId: string, oldId: string, newId: string): void {
+    this.db
+      .prepare(
+        `UPDATE sub_tasks
+         SET depends_on = REPLACE(depends_on, ?, ?)
+         WHERE task_id = ? AND depends_on LIKE ?`,
+      )
+      .run(oldId, newId, taskId, `%${oldId}%`);
   }
 
   updateTaskStatus(id: string, status: TaskStatus, completedAt?: number | null): void {
@@ -309,5 +359,11 @@ export class Storage {
     return this.db
       .prepare(`SELECT * FROM sub_tasks WHERE task_id = ? ORDER BY created_at ASC`)
       .all(taskId) as SubTaskRow[];
+  }
+
+  getSubTask(id: string): SubTaskRow | undefined {
+    return this.db
+      .prepare(`SELECT * FROM sub_tasks WHERE id = ?`)
+      .get(id) as SubTaskRow | undefined;
   }
 }

@@ -58,6 +58,27 @@ describe("Storage migration", () => {
     expect(row.round).toBe(2);
     storage.close();
   });
+
+  it("getSubTask returns the full row by id (or undefined when missing)", () => {
+    const storage = new Storage(dbFile);
+    storage.insertTask({
+      id: "t1", description: "d", cwd: "/w", team_name: "default",
+      status: "running", created_at: 100,
+    });
+    storage.insertSubTask({
+      id: "sub-x", task_id: "t1", title: "T", prompt: "P",
+      assigned_agent: "Hana", status: "completed", created_at: 200,
+      target_repo: "fe", depends_on: null, round: 1,
+    });
+    const row = storage.getSubTask("sub-x");
+    expect(row?.id).toBe("sub-x");
+    expect(row?.task_id).toBe("t1");
+    expect(row?.assigned_agent).toBe("Hana");
+    expect(row?.target_repo).toBe("fe");
+    expect(row?.round).toBe(1);
+    expect(storage.getSubTask("missing")).toBeUndefined();
+    storage.close();
+  });
 });
 
 describe("PBI state column", () => {
@@ -132,6 +153,90 @@ describe("resume_lock column migration", () => {
       .prepare("SELECT resume_lock FROM tasks WHERE id = 't1'")
       .get() as { resume_lock: string | null };
     expect(row.resume_lock).toBeNull();
+    storage.close();
+  });
+
+  it("adds design_state column to legacy DB and defaults existing rows to NULL", () => {
+    const legacy = new Database(dbFile);
+    legacy.exec(`
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, description TEXT NOT NULL, cwd TEXT NOT NULL,
+        team_name TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, completed_at INTEGER);
+      INSERT INTO tasks VALUES ('t1','d','/w','default','running',100,NULL);
+    `);
+    legacy.close();
+    const storage = new Storage(dbFile);
+    const cols = storage.db.pragma("table_info(tasks)") as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("design_state");
+    const row = storage.db
+      .prepare("SELECT design_state FROM tasks WHERE id = 't1'")
+      .get() as { design_state: string | null };
+    expect(row.design_state).toBeNull();
+    storage.close();
+  });
+
+  it("round-trips design_state via updateDesignState and readDesignState", () => {
+    const storage = new Storage(dbFile);
+    storage.insertTask({
+      id: "t-design",
+      description: "d",
+      cwd: "/w",
+      team_name: "default",
+      status: "running",
+      created_at: Date.now(),
+    });
+    expect(storage.readDesignState("t-design")).toBeNull();
+    const state = {
+      phase: "awaiting_design_approval" as const,
+      designer_sub_task_id: "sub-1",
+      iteration: 1,
+      completed_sub_task_ids: ["sub-1"],
+      last_checkpoint: {
+        modified_files: ["login.pen"],
+        summary: "ok",
+        preview_images: [],
+      },
+    };
+    storage.updateDesignState("t-design", state);
+    expect(storage.readDesignState("t-design")).toEqual(state);
+    storage.close();
+  });
+
+  it("swapDependency replaces an old sub-task id inside depends_on JSON arrays", () => {
+    const storage = new Storage(dbFile);
+    storage.insertTask({
+      id: "tk", description: "d", cwd: "/w", team_name: "default",
+      status: "running", created_at: Date.now(),
+    });
+    storage.insertSubTask({
+      id: "hana-old", task_id: "tk", title: "design", prompt: "p",
+      assigned_agent: "Hana", status: "completed", created_at: Date.now(),
+      depends_on: null, round: 1,
+    });
+    storage.insertSubTask({
+      id: "impl-1", task_id: "tk", title: "build", prompt: "p",
+      assigned_agent: "Kai", status: "pending", created_at: Date.now(),
+      depends_on: JSON.stringify(["hana-old"]), round: 1,
+    });
+    storage.insertSubTask({
+      id: "impl-2", task_id: "tk", title: "build2", prompt: "p",
+      assigned_agent: "Aki", status: "pending", created_at: Date.now(),
+      depends_on: JSON.stringify(["hana-old", "other-id"]), round: 1,
+    });
+    storage.insertSubTask({
+      id: "unrelated", task_id: "tk", title: "x", prompt: "p",
+      assigned_agent: "Lin", status: "pending", created_at: Date.now(),
+      depends_on: JSON.stringify(["other-id"]), round: 1,
+    });
+
+    storage.swapDependency("tk", "hana-old", "hana-new");
+
+    const rows = storage.db
+      .prepare("SELECT id, depends_on FROM sub_tasks WHERE task_id = 'tk' ORDER BY id")
+      .all() as Array<{ id: string; depends_on: string | null }>;
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r.depends_on]));
+    expect(JSON.parse(byId["impl-1"]!)).toEqual(["hana-new"]);
+    expect(JSON.parse(byId["impl-2"]!)).toEqual(["hana-new", "other-id"]);
+    expect(JSON.parse(byId["unrelated"]!)).toEqual(["other-id"]);
     storage.close();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPbiPlannerPrompt, buildPbiAssemblyPrompt } from "./planner-runner.js";
+import { buildPbiPlannerPrompt, buildPbiAssemblyPrompt, validatePlanDag } from "./planner-runner.js";
 
 describe("buildPbiPlannerPrompt", () => {
   it("starts with the MODE: PBI-Planning marker on first line", () => {
@@ -48,5 +48,42 @@ describe("buildPbiAssemblyPrompt", () => {
     expect(p).toContain("PAX!");
     expect(p).toContain("status: failed");
     expect(p).toContain("AKI!");
+  });
+});
+
+describe("validatePlanDag — Hana layer-0 invariant", () => {
+  const roleOf = (name: string) => (name === "Hana" ? "designer" : "implementer");
+
+  it("rejects a plan where Hana exists with dependsOn:[] but other sub-tasks omit her", () => {
+    const plan = {
+      overallStrategy: "x",
+      subTasks: [
+        { id: "design", title: "t", prompt: "p", assignedAgent: "Hana", dependsOn: [] },
+        { id: "impl", title: "t", prompt: "p", assignedAgent: "Kai", dependsOn: [] },
+      ],
+    };
+    expect(() => validatePlanDag(plan, roleOf)).toThrow(/Hana.*dependsOn|dependsOn.*Hana|design.*dependsOn/);
+  });
+
+  it("accepts a plan where every other round-1 sub-task depends on Hana", () => {
+    const plan = {
+      overallStrategy: "x",
+      subTasks: [
+        { id: "design", title: "t", prompt: "p", assignedAgent: "Hana", dependsOn: [] },
+        { id: "impl", title: "t", prompt: "p", assignedAgent: "Kai", dependsOn: ["design"] },
+        { id: "rev",  title: "t", prompt: "p", assignedAgent: "Iris", dependsOn: ["design", "impl"] },
+      ],
+    };
+    expect(() => validatePlanDag(plan, roleOf)).not.toThrow();
+  });
+
+  it("does nothing special when Hana is not in the plan", () => {
+    const plan = {
+      overallStrategy: "x",
+      subTasks: [
+        { id: "impl", title: "t", prompt: "p", assignedAgent: "Kai", dependsOn: [] },
+      ],
+    };
+    expect(() => validatePlanDag(plan, roleOf)).not.toThrow();
   });
 });

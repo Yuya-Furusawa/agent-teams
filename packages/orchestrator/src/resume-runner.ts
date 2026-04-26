@@ -373,6 +373,7 @@ async function runTriageStage(args: DispatchArgs): Promise<{ status: "completed"
     eventsPath: joinPath(taskDir(args.taskRow.id), "planner-events.jsonl"),
     inlineAgents: ctx.inlineAgents,
     ...(ctx.repos ? { repos: ctx.repos } : {}),
+    roleOf: ctx.roleOf,
   });
 
   const round1Entries = prepareRound({ storage: args.storage, taskId: args.taskRow.id, plan, round: 1 });

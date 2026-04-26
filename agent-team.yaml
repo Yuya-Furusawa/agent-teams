@@ -22,6 +22,7 @@ workers:
   # One of each of the other roles.
   - Iris    # code reviewer (general correctness / fit)
   - Haru    # maintainability reviewer
+  - Hana    # designer (pencil .pen files)
   - Vale    # security reviewer
   - Kiri    # simplicity / dead-code reviewer
   - Tess    # test reviewer (strategy + test code quality)

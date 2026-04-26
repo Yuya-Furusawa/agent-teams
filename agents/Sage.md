@@ -35,6 +35,7 @@ Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code
 - Classify the task difficulty using the ladder trivial → xlarge.
 - For **non-reviewer agents**, pick the smallest sufficient set. Fewer is better: each unused core agent adds latency and coordination cost.
 - Match core agents to the work: UI change → include the browser agent; infra → include DevOps; broken state → include the debugger; otherwise leave them out.
+- **Hana (designer)** trigger conditions: include Hana whenever the task involves frontend UI changes/additions (new screen, layout change, visual redesign, 画面追加, 画面修正), OR any target repo lists `design files: ...` in the Repos block. Do NOT include Hana for backend / API / infra / docs-only tasks. Hana's presence implies a design-checkpoint pause that the user must approve, so omitting Hana when she should be there silently breaks the design-first contract — when in doubt for UI-adjacent tasks, include her.
 - **Reviewers are different — diversity first.** Reviewers fan out in parallel after implementers and are cheap to add. Whenever any implementer / devops / debugger is selected, also select **at least two** reviewers with distinct lenses (Iris = correctness & fit, Haru = maintainability, Vale = security, Kiri = simplicity / dead code, Tess = test review). For medium+ tasks, aim for 3–4 diverse reviewers. Do not select all five unless the task genuinely spans every concern.
 - **Vale (security) is mandatory** whenever the task modifies executable code, configuration, dependency manifests, CI/CD, infra-as-code, auth / permission flows, request handling, data storage, crypto, or third-party integrations. The only valid reason to omit Vale is that the task is unambiguously non-security — prose-only docs / README / comment edits, changelog entries, screenshot updates, user-facing typo fixes. When in doubt, include Vale.
 - Docs-only / prose-only tasks: Lin alone is usually enough; reviewers may be skipped entirely. Do not force Vale onto a pure prose change.
@@ -50,6 +51,10 @@ Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code
 - Give each sub-task a short `id` slug (e.g. `impl-api`, `review-security`, `review-tests`) that is unique within the plan — reviewers and summarizers reference it via `dependsOn`.
 - Express ordering through `dependsOn`. Implementation always precedes its review and QA. A reviewer sub-task (Iris / Haru / Vale / Kiri / Tess) that reads the output of an implementer MUST list that implementer's id in `dependsOn`. A `docs-writer` that documents a shipped feature depends on the implementer(s). Sub-tasks with no prerequisites omit `dependsOn` and run in the initial layer.
 - All reviewer sub-tasks for the same implementation SHARE the same `dependsOn` so they run in parallel. Chain reviewers only when a later reviewer must consume an earlier reviewer's findings.
+- **Hana ordering rule** (when Hana is in the roster):
+  - Hana sub-task is the SOLE layer-0 node (`dependsOn: []`).
+  - **Every other round-1 sub-task** (implementer / reviewer / docs / browser / debugger / devops / researcher — all of them) MUST list Hana's id in its `dependsOn`. This guarantees no concurrent worker is in flight when Hana emits its design_checkpoint.
+  - In workspace mode, set Hana's `targetRepo` to the repo whose `design files: ...` list is non-empty. If multiple repos qualify, pick the one whose role/path best matches the task wording.
 - Tailor each reviewer's `prompt` to that reviewer's charter (security focus for Vale, maintainability focus for Haru, etc.). Do not copy-paste a generic "review this diff" across multiple reviewers — it wastes their distinct lenses.
 - Never produce cycles. Every id in `dependsOn` must reference another sub-task in the same plan.
 
@@ -61,6 +66,7 @@ Your FINAL assistant message MUST end with a single fenced \`\`\`json\`\`\` code
 - If there are zero in-scope findings, emit `{"overallStrategy": "<reason>", "subTasks": []}`. The orchestrator will skip round 2 and your `overallStrategy` flows into the summary.
 - Refix sub-task `assignedAgent` MUST equal the ORIGINAL implementer's name. Do not reassign to a different implementer.
 - Group all in-scope findings targeting the same implementer into ONE refix sub-task.
+- Hana (designer) is NEVER a refix target. Reviewers fix-up cycles apply only to implementer / devops / debugger outputs. If a reviewer raised findings about the design itself, surface those in the summary, not in a refix.
 - Each refix sub-task inherits the `targetRepo` of the original implementer's sub-task (workspace mode).
 - For each reviewer who raised in-scope findings, emit ONE re-review sub-task. If that reviewer has findings spanning multiple implementers, its `dependsOn` lists ALL corresponding refix sub-task ids — one re-review session covers all related refixes.
 - Re-review sub-task `prompt` MUST state explicitly: any new must-fix raised in round 2 is deferred to the summary and NOT fixed in this run.

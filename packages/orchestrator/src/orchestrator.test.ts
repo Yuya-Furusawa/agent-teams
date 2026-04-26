@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTask } from "./orchestrator.js";
+import { runTask, DesignCheckpointReached, computeAllowedAssignees, type SubTaskEntry } from "./orchestrator.js";
 import { parsePbiNumber } from "./pbi-input.js";
 import {
   __setAgentRunnerFactoryForTests as setPlannerFactory,
@@ -87,8 +87,8 @@ describe("runTask with refix phase", () => {
           json: {
             overallStrategy: "one impl + one reviewer",
             subTasks: [
-              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai" },
-              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", dependsOn: ["impl"] },
+              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai", targetRepo: "(local)" },
+              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", targetRepo: "(local)", dependsOn: ["impl"] },
             ],
           },
         },
@@ -129,8 +129,8 @@ describe("runTask with refix phase", () => {
           json: {
             overallStrategy: "impl + review",
             subTasks: [
-              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai" },
-              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", dependsOn: ["impl"] },
+              { id: "impl", title: "Implement", prompt: "do it", assignedAgent: "Kai", targetRepo: "(local)" },
+              { id: "review", title: "Review", prompt: "review it", assignedAgent: "Iris", targetRepo: "(local)", dependsOn: ["impl"] },
             ],
           },
         },
@@ -139,8 +139,8 @@ describe("runTask with refix phase", () => {
           json: {
             overallStrategy: "Iris raised a must-fix on null check.",
             subTasks: [
-              { id: "refix-kai", title: "Fix null check", prompt: "fix it", assignedAgent: "Kai" },
-              { id: "rereview", title: "Re-review", prompt: "verify", assignedAgent: "Iris", dependsOn: ["refix-kai"] },
+              { id: "refix-kai", title: "Fix null check", prompt: "fix it", assignedAgent: "Kai", targetRepo: "(local)" },
+              { id: "rereview", title: "Re-review", prompt: "verify", assignedAgent: "Iris", targetRepo: "(local)", dependsOn: ["refix-kai"] },
             ],
           },
         },
@@ -187,7 +187,7 @@ describe("runTask with refix phase", () => {
           exitCode: 0,
           parsedJson: {
             overallStrategy: "one impl",
-            subTasks: [{ id: "impl", title: "Do", prompt: "p", assignedAgent: "Kai" }],
+            subTasks: [{ id: "impl", title: "Do", prompt: "p", assignedAgent: "Kai", targetRepo: "(local)" }],
           },
           lastText: "",
         };
@@ -239,5 +239,52 @@ describe("runTask PBI number resolution", () => {
       else delete process.env.AGENT_TEAMS_AGENTS_DIR;
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("DesignCheckpointReached", () => {
+  it("carries the designer sub-task id and the checkpoint payload", () => {
+    const err = new DesignCheckpointReached({
+      designerSubTaskId: "sub-h",
+      checkpoint: { modified_files: ["a.pen"], summary: "s", preview_images: [] },
+      completedIds: new Set(["sub-h"]),
+    });
+    expect(err.designerSubTaskId).toBe("sub-h");
+    expect(err.checkpoint.modified_files).toEqual(["a.pen"]);
+    expect(err.completedIds.has("sub-h")).toBe(true);
+    expect(err).toBeInstanceOf(Error);
+  });
+});
+
+describe("computeAllowedAssignees", () => {
+  const mkEntry = (id: string, agent: string, deps: string[] = []): SubTaskEntry => ({
+    id,
+    index: 0,
+    plan: {
+      id,
+      title: "t",
+      prompt: "p",
+      assignedAgent: agent,
+      dependsOn: deps,
+    },
+  });
+
+  it("excludes designer-role agents from refix allowedAssignees", () => {
+    const round1Entries = [
+      mkEntry("h", "Hana"),
+      mkEntry("k", "Kai", ["h"]),
+    ];
+    const roleOf = (n: string) => (n === "Hana" ? "designer" : "implementer");
+    expect(computeAllowedAssignees(round1Entries, roleOf)).toEqual(["Kai"]);
+  });
+
+  it("returns deduplicated names when an agent appears in multiple sub-tasks", () => {
+    const round1Entries = [
+      mkEntry("h", "Hana"),
+      mkEntry("k1", "Kai", ["h"]),
+      mkEntry("k2", "Kai", ["h"]),
+    ];
+    const roleOf = (n: string) => (n === "Hana" ? "designer" : "implementer");
+    expect(computeAllowedAssignees(round1Entries, roleOf)).toEqual(["Kai"]);
   });
 });

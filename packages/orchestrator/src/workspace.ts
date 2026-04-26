@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { workspaceFile, workspacesDir } from "@agent-teams/storage";
+import { globSync } from "glob";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { PbiConfigSchema } from "./team.js";
@@ -63,4 +64,32 @@ export function workspaceRepoByName(
 ): Repo | undefined {
   if (!name) return undefined;
   return workspace.repos.find((r) => r.name === name);
+}
+
+export interface RepoWithDesign extends Repo {
+  /** Relative paths (from `repo.path`) of every `.pen` file found, omitted if none. */
+  designFiles?: string[];
+}
+
+const DESIGN_SCAN_IGNORE = [
+  "node_modules/**",
+  ".git/**",
+  "dist/**",
+  "build/**",
+  ".next/**",
+  ".turbo/**",
+  "target/**",
+  "vendor/**",
+  "out/**",
+];
+
+export function scanDesignFiles(repos: Repo[]): RepoWithDesign[] {
+  return repos.map((r) => {
+    const files = globSync("**/*.pen", {
+      cwd: r.path,
+      ignore: DESIGN_SCAN_IGNORE,
+      nodir: true,
+    });
+    return files.length > 0 ? { ...r, designFiles: files.sort() } : r;
+  });
 }

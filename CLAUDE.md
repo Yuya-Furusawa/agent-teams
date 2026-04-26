@@ -116,7 +116,7 @@ Earlier designs shared a role body across personas and overrode just persona + p
 
 ### Default roster
 
-15 agents: 1 planner (Sage) + 14 workers. Kai/Aki/Mika (role: implementer), Iris (code-reviewer), Haru (maintainability-reviewer), Vale (security-reviewer), Kiri (simplicity-reviewer), Tess (test-reviewer), Quinn (qa-engineer), Ren (researcher), Nova (browser-operator), Juno (debugger), Atlas (devops-engineer), Lin (docs-writer).
+16 agents: 1 planner (Sage) + 15 workers. Kai/Aki/Mika (role: implementer), Hana (designer), Iris (code-reviewer), Haru (maintainability-reviewer), Vale (security-reviewer), Kiri (simplicity-reviewer), Tess (test-reviewer), Quinn (qa-engineer), Ren (researcher), Nova (browser-operator), Juno (debugger), Atlas (devops-engineer), Lin (docs-writer).
 
 ## Data layout
 

@@ -20,6 +20,7 @@ import { loadAgentRegistry, type AgentRegistry } from "./agent-registry.js";
 import { buildInstanceInlineAgents, type AgentInstance } from "./instance.js";
 import { runWorker } from "./worker-runner.js";
 import { runPbiPlanner, runPbiAssembly } from "./planner-runner.js";
+import { parseInterviewReport } from "./checkpoint-parse.js";
 import { runRoundDag, prepareRound, truncate, type SubTaskEntry } from "./orchestrator.js";
 import { loadPbiConfig } from "./pbi-config.js";
 import { nextPbiNumber } from "./pbi-numbering.js";
@@ -94,43 +95,6 @@ function buildPbiInlineAgents(registry: AgentRegistry): Record<string, { descrip
     });
   }
   return buildInstanceInlineAgents(instances);
-}
-
-function parseInterviewReport(report: string):
-  | { kind: "ok" }
-  | { kind: "questions"; questions: Array<{ id: string; question: string }> } {
-  const trimmed = report.trim();
-  if (!trimmed) return { kind: "ok" };
-  const tryParse = (s: string): { needs_input?: unknown; questions?: unknown } | null => {
-    try {
-      return JSON.parse(s) as { needs_input?: unknown; questions?: unknown };
-    } catch {
-      return null;
-    }
-  };
-  let parsed = tryParse(trimmed);
-  if (!parsed) {
-    const fenced = /```json\s*([\s\S]*?)```/.exec(trimmed);
-    if (fenced) parsed = tryParse(fenced[1]!);
-  }
-  if (!parsed) {
-    const obj = /\{[\s\S]*\}/.exec(trimmed);
-    if (obj) parsed = tryParse(obj[0]);
-  }
-  if (!parsed || parsed.needs_input !== true || !Array.isArray(parsed.questions)) {
-    return { kind: "ok" };
-  }
-  const qs = parsed.questions
-    .filter(
-      (q): q is { id: string; question: string } =>
-        !!q &&
-        typeof q === "object" &&
-        typeof (q as { id?: unknown }).id === "string" &&
-        typeof (q as { question?: unknown }).question === "string",
-    )
-    .map((q) => ({ id: q.id, question: q.question }));
-  if (qs.length === 0) return { kind: "ok" };
-  return { kind: "questions", questions: qs };
 }
 
 export async function runPbiTask(opts: RunPbiTaskOptions): Promise<RunPbiTaskResult> {

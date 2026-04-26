@@ -14,6 +14,7 @@ import {
   taskDir,
   writeSummary,
   writeTaskSnapshot,
+  type DesignState,
   type SubTaskStatus,
 } from "@agent-teams/storage";
 import type { InlineAgentDefinition } from "@agent-teams/agent-runner";
@@ -27,6 +28,7 @@ import {
   resolveWorkspaceTeam,
 } from "./instance.js";
 import { runPlanner, runRefixPlanner, runSummarizer, runTriage } from "./planner-runner.js";
+import { parseDesignCheckpoint, type DesignCheckpoint } from "./checkpoint-parse.js";
 import type { SubTaskPlan } from "./planner-schema.js";
 import { loadPbiConfig } from "./pbi-config.js";
 import { buildPbiTaskDescription, parsePbiNumber } from "./pbi-input.js";
@@ -35,6 +37,7 @@ import { loadTeam, validateTeamAgainstRegistry, type Team } from "./team.js";
 import { runWorker } from "./worker-runner.js";
 import {
   loadWorkspace,
+  scanDesignFiles,
   workspaceRepoByName,
   type Repo,
   type Workspace,
@@ -45,6 +48,42 @@ export interface SubTaskEntry {
   id: string;
   index: number;
   plan: SubTaskPlan;
+}
+
+export class DesignCheckpointReached extends Error {
+  readonly designerSubTaskId: string;
+  readonly checkpoint: DesignCheckpoint;
+  readonly completedIds: ReadonlySet<string>;
+  constructor(payload: {
+    designerSubTaskId: string;
+    checkpoint: DesignCheckpoint;
+    completedIds: ReadonlySet<string>;
+  }) {
+    super(`design checkpoint reached for sub-task ${payload.designerSubTaskId}`);
+    this.name = "DesignCheckpointReached";
+    this.designerSubTaskId = payload.designerSubTaskId;
+    this.checkpoint = payload.checkpoint;
+    this.completedIds = payload.completedIds;
+  }
+}
+
+/**
+ * Compute the deduplicated set of agent names eligible to receive refix sub-tasks.
+ * Designer-role agents (e.g. Hana) are excluded — reviewer fix-up cycles target
+ * implementer / devops / debugger outputs only. Design feedback flows through the
+ * design-checkpoint pause/resume path instead.
+ */
+export function computeAllowedAssignees(
+  round1Entries: SubTaskEntry[],
+  roleOf: (agent: string) => string | undefined,
+): string[] {
+  return [
+    ...new Set(
+      round1Entries
+        .filter((e) => roleOf(e.plan.assignedAgent) !== "designer")
+        .map((e) => e.plan.assignedAgent),
+    ),
+  ];
 }
 
 const DEFAULT_MAX_PARALLEL = 3;
@@ -59,7 +98,7 @@ export interface RunTaskOptions {
 export interface RunTaskResult {
   taskId: string;
   summaryPath: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "awaiting_user_input";
 }
 
 export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
@@ -100,7 +139,13 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
   const inlineAgents = buildInstanceInlineAgents([...workerInstances, plannerInstance]);
   const roleOf = (name: string): string | undefined =>
     instancesByName.get(name)?.role;
-  const repos = ws?.repos;
+  // Pre-scan target repos (or the local cwd in single-repo mode) for `.pen`
+  // design files. The result feeds the triage/planner prompts so Sage knows
+  // when to include Hana. Always pass the scanned list — single-repo mode
+  // uses a synthetic "(local)" entry so the same surface works in both modes.
+  const baseRepos: Repo[] = ws?.repos ?? [{ name: "(local)", path: cwd, role: "" }];
+  const reposWithDesign = scanDesignFiles(baseRepos);
+  const repos = reposWithDesign;
 
   const storage = new Storage();
   const taskId = ulid();
@@ -194,6 +239,7 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       eventsPath: join(taskDir(taskId), "planner-events.jsonl"),
       inlineAgents,
       ...(repos ? { repos } : {}),
+      roleOf,
     });
 
     if (workspace) {
@@ -311,6 +357,34 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       status,
     };
   } catch (err) {
+    if (err instanceof DesignCheckpointReached) {
+      const state: DesignState = {
+        phase: "awaiting_design_approval",
+        designer_sub_task_id: err.designerSubTaskId,
+        iteration: 1,
+        completed_sub_task_ids: [...err.completedIds],
+        last_checkpoint: {
+          modified_files: err.checkpoint.modified_files,
+          summary: err.checkpoint.summary,
+          preview_images: err.checkpoint.preview_images,
+        },
+      };
+      storage.updateDesignState(taskId, state);
+      storage.updateTaskStatus(taskId, "awaiting_user_input");
+      if (workspace) {
+        await cmuxLog({
+          workspace,
+          source: "agent-teams",
+          message: `task ${taskId}: awaiting design approval (${err.checkpoint.modified_files.length} files)`,
+        });
+        await clearStatus({ workspace, key: "agent-teams" }).catch(() => {});
+      }
+      process.stdout.write(`STATUS: awaiting_design_approval\n`);
+      process.stdout.write(`TASK_ID: ${taskId}\n`);
+      process.stdout.write(`ITERATION: 1\n`);
+      process.stdout.write("```json\n" + JSON.stringify(err.checkpoint, null, 2) + "\n```\n");
+      return { taskId, summaryPath: "", status: "awaiting_user_input" };
+    }
     storage.updateTaskStatus(taskId, "failed", Date.now());
     if (workspace) {
       await setStatus({
@@ -402,9 +476,7 @@ export async function runRefixPhase(params: {
       await cmuxLog({ workspace, source: "agent-teams", message: refixSkipReason });
     }
   } else {
-    const allowedAssignees = [
-      ...new Set(round1Entries.map((e) => e.plan.assignedAgent)),
-    ];
+    const allowedAssignees = computeAllowedAssignees(round1Entries, roleOf);
 
     const refixPlan = await runRefixPlanner({
       task: description,
@@ -417,6 +489,7 @@ export async function runRefixPhase(params: {
       eventsPath: join(taskDir(taskId), "refix-planner-events.jsonl"),
       inlineAgents,
       ...(repos ? { repos } : {}),
+      roleOf,
     });
 
     if (refixPlan.subTasks.length === 0) {
@@ -662,6 +735,10 @@ export async function runRoundDag(params: {
     });
   };
 
+  const completedIds = new Set<string>();
+  let designCheckpointPayload: DesignCheckpoint | null = null;
+  let designCheckpointId: string | null = null;
+
   await runDag(
     dagNodes,
     params.maxParallel,
@@ -698,10 +775,31 @@ export async function runRoundDag(params: {
       } finally {
         completed++;
         await reportProgress().catch(() => {});
+        completedIds.add(entry.id);
+
+        // Detect Hana's design checkpoint. Hana is the sole layer-0 node when
+        // present (enforced by validatePlanDag), so when this fires no other
+        // round-1 worker is in flight.
+        if (entry.plan.assignedAgent === "Hana") {
+          const report = readReport(params.taskId, entry.id) ?? "";
+          const checkpoint = parseDesignCheckpoint(report);
+          if (checkpoint && checkpoint.modified_files.length > 0) {
+            designCheckpointPayload = checkpoint;
+            designCheckpointId = entry.id;
+          }
+        }
       }
     },
     params.preCompletedIds ? { preCompletedIds: params.preCompletedIds } : undefined,
   );
+
+  if (designCheckpointPayload && designCheckpointId) {
+    throw new DesignCheckpointReached({
+      designerSubTaskId: designCheckpointId,
+      checkpoint: designCheckpointPayload,
+      completedIds,
+    });
+  }
 }
 
 async function finalizeWorkspaceStatus(
