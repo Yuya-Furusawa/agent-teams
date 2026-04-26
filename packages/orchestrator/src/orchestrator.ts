@@ -14,6 +14,7 @@ import {
   taskDir,
   writeSummary,
   writeTaskSnapshot,
+  type SubTaskStatus,
 } from "@agent-teams/storage";
 import type { InlineAgentDefinition } from "@agent-teams/agent-runner";
 import { join } from "node:path";
@@ -245,184 +246,40 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       round: 1,
     });
 
-    // ===== Refix planning =====
-    if (workspace) {
-      await setStatus({ workspace, key: "agent-teams", value: "refix planning…", icon: "arrow.clockwise" });
-    }
-
-    const round1ReportInputs = round1Entries.map((e) => ({
-      subTaskId: e.id,
-      title: e.plan.title,
-      assignedAgent: e.plan.assignedAgent,
-      role: roleOf(e.plan.assignedAgent),
-      status: storage.getSubTaskStatus(e.id),
-      report: readReport(taskId, e.id) ?? "",
-      targetRepo: e.plan.targetRepo ?? null,
-    }));
-
-    const originalPlanEntries = round1Entries.map((e) => ({
-      id: e.plan.id,
-      title: e.plan.title,
-      prompt: e.plan.prompt,
-      assignedAgent: e.plan.assignedAgent,
-      targetRepo: e.plan.targetRepo ?? null,
-    }));
-
-    const roundOneHadReviewers = round1Entries.some((e) => {
-      const role = roleOf(e.plan.assignedAgent) ?? "";
-      return role.endsWith("-reviewer");
+    const { round2Entries, refixSkipReason } = await runRefixPhase({
+      storage,
+      taskId,
+      description,
+      cwd,
+      team,
+      ws,
+      workspace,
+      inlineAgents,
+      plannerAgentName: plannerInstance.name,
+      round1Entries,
+      roleOf,
+      maxParallel,
+      repos,
     });
-
-    let round2Entries: SubTaskEntry[] = [];
-    let refixSkipReason: string | undefined;
-
-    if (!roundOneHadReviewers) {
-      refixSkipReason = "Round 1 had no reviewers — refix phase skipped.";
-      if (workspace) {
-        await cmuxLog({ workspace, source: "agent-teams", message: refixSkipReason });
-      }
-    } else {
-      const allowedAssignees = [
-        ...new Set(round1Entries.map((e) => e.plan.assignedAgent)),
-      ];
-
-      const refixPlan = await runRefixPlanner({
-        task: description,
-        cwd,
-        team,
-        plannerAgentName: plannerInstance.name,
-        round1Reports: round1ReportInputs,
-        originalPlan: originalPlanEntries,
-        allowedAssignees,
-        eventsPath: join(taskDir(taskId), "refix-planner-events.jsonl"),
-        inlineAgents,
-        ...(repos ? { repos } : {}),
-      });
-
-      if (refixPlan.subTasks.length === 0) {
-        refixSkipReason = refixPlan.overallStrategy;
-        if (workspace) {
-          await cmuxLog({
-            workspace,
-            source: "agent-teams",
-            message: `no refix needed: ${truncate(refixPlan.overallStrategy, 120)}`,
-          });
-        }
-      } else {
-        // Warn (fail open) if Sage reassigned to an agent not in round 1.
-        const round1Agents = new Set(round1Entries.map((e) => e.plan.assignedAgent));
-        for (const sub of refixPlan.subTasks) {
-          if (!round1Agents.has(sub.assignedAgent) && workspace) {
-            await cmuxLog({
-              workspace,
-              source: "agent-teams",
-              level: "warn",
-              message: `refix sub-task "${sub.title}" assigned to ${sub.assignedAgent} (not present in round 1)`,
-            });
-          }
-        }
-
-        // ===== Round 2 =====
-        round2Entries = prepareRound({ storage, taskId, plan: refixPlan, round: 2 });
-
-        const round2PlanIdToUlid = new Map<string, string>();
-        for (const e of round2Entries) round2PlanIdToUlid.set(e.plan.id, e.id);
-
-        writeTaskSnapshot({
-          id: taskId,
-          description,
-          cwd,
-          team: team.name,
-          status: "running",
-          workspace: ws?.name ?? null,
-          repos: ws ? ws.repos : null,
-          subTasks: [
-            ...round1Entries.map((e) => ({
-              id: e.id,
-              title: e.plan.title,
-              assignedAgent: e.plan.assignedAgent,
-              status: storage.getSubTaskStatus(e.id),
-              targetRepo: e.plan.targetRepo ?? null,
-              dependsOn: (e.plan.dependsOn ?? [])
-                .map((d) => round1PlanIdToUlid.get(d))
-                .filter((x): x is string => Boolean(x)),
-              round: 1 as const,
-            })),
-            ...round2Entries.map((e) => ({
-              id: e.id,
-              title: e.plan.title,
-              assignedAgent: e.plan.assignedAgent,
-              status: "pending" as const,
-              targetRepo: e.plan.targetRepo ?? null,
-              dependsOn: (e.plan.dependsOn ?? [])
-                .map((d) => round2PlanIdToUlid.get(d))
-                .filter((x): x is string => Boolean(x)),
-              round: 2 as const,
-            })),
-          ],
-          createdAt: Date.now(),
-          completedAt: null,
-        });
-
-        if (workspace) {
-          await setStatus({
-            workspace,
-            key: "agent-teams",
-            value: `refix 0/${round2Entries.length}`,
-            icon: "arrow.clockwise",
-          });
-        }
-
-        await runRoundDag({
-          entries: round2Entries,
-          storage, taskId, ws, cwd, team, inlineAgents,
-          originalTaskDescription: description,
-          maxParallel,
-          workspace,
-          round: 2,
-        });
-      }
-    }
 
     if (workspace) {
       await setStatus({ workspace, key: "agent-teams", value: "summarizing…", icon: "sparkles" });
     }
 
-    const allEntries: Array<{ entry: SubTaskEntry; round: 1 | 2 }> = [
-      ...round1Entries.map((e) => ({ entry: e, round: 1 as const })),
-      ...round2Entries.map((e) => ({ entry: e, round: 2 as const })),
-    ];
-
-    const subTaskReports = allEntries.map(({ entry, round }) => {
-      const role = roleOf(entry.plan.assignedAgent);
-      return {
-        id: entry.id,
-        title: entry.plan.title,
-        agent: entry.plan.assignedAgent,
-        ...(role ? { role } : {}),
-        status: storage.getSubTaskStatus(entry.id),
-        report: readReport(taskId, entry.id) ?? "",
-        targetRepo: entry.plan.targetRepo ?? null,
-        round,
-      };
-    });
-
-    const summary = await runSummarizer({
-      task: description,
+    const { status, subTaskReports } = await runSummaryPhase({
+      storage,
+      taskId,
+      description,
       cwd,
       team,
-      subTaskReports,
-      plannerAgentName: plannerInstance.name,
-      eventsPath: join(taskDir(taskId), "summarizer-events.jsonl"),
       inlineAgents,
-      ...(refixSkipReason ? { refixSkipReason } : {}),
-      ...(repos ? { repos } : {}),
+      plannerAgentName: plannerInstance.name,
+      round1Entries,
+      round2Entries,
+      roleOf,
+      refixSkipReason,
+      repos,
     });
-    writeSummary(taskId, summary.summary);
-
-    const failed = subTaskReports.some((r) => r.status === "failed");
-    const status = failed ? "failed" : "completed";
-    storage.updateTaskStatus(taskId, status, Date.now());
 
     writeTaskSnapshot({
       id: taskId,
@@ -473,6 +330,263 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       }, 10_000).unref();
     }
   }
+}
+
+export async function runRefixPhase(params: {
+  storage: Storage;
+  taskId: string;
+  description: string;
+  cwd: string;
+  team: Team;
+  ws: Workspace | undefined;
+  workspace: WorkspaceRef | null;
+  inlineAgents: Record<string, InlineAgentDefinition>;
+  plannerAgentName: string;
+  round1Entries: SubTaskEntry[];
+  roleOf: (name: string) => string | undefined;
+  maxParallel: number;
+  repos: Workspace["repos"] | undefined;
+}): Promise<{
+  round2Entries: SubTaskEntry[];
+  refixSkipReason: string | undefined;
+}> {
+  const {
+    storage,
+    taskId,
+    description,
+    cwd,
+    team,
+    ws,
+    workspace,
+    inlineAgents,
+    plannerAgentName,
+    round1Entries,
+    roleOf,
+    maxParallel,
+    repos,
+  } = params;
+
+  if (workspace) {
+    await setStatus({ workspace, key: "agent-teams", value: "refix planning…", icon: "arrow.clockwise" });
+  }
+
+  const round1ReportInputs = round1Entries.map((e) => ({
+    subTaskId: e.id,
+    title: e.plan.title,
+    assignedAgent: e.plan.assignedAgent,
+    role: roleOf(e.plan.assignedAgent),
+    status: storage.getSubTaskStatus(e.id),
+    report: readReport(taskId, e.id) ?? "",
+    targetRepo: e.plan.targetRepo ?? null,
+  }));
+
+  const originalPlanEntries = round1Entries.map((e) => ({
+    id: e.plan.id,
+    title: e.plan.title,
+    prompt: e.plan.prompt,
+    assignedAgent: e.plan.assignedAgent,
+    targetRepo: e.plan.targetRepo ?? null,
+  }));
+
+  const roundOneHadReviewers = round1Entries.some((e) => {
+    const role = roleOf(e.plan.assignedAgent) ?? "";
+    return role.endsWith("-reviewer");
+  });
+
+  let round2Entries: SubTaskEntry[] = [];
+  let refixSkipReason: string | undefined;
+
+  if (!roundOneHadReviewers) {
+    refixSkipReason = "Round 1 had no reviewers — refix phase skipped.";
+    if (workspace) {
+      await cmuxLog({ workspace, source: "agent-teams", message: refixSkipReason });
+    }
+  } else {
+    const allowedAssignees = [
+      ...new Set(round1Entries.map((e) => e.plan.assignedAgent)),
+    ];
+
+    const refixPlan = await runRefixPlanner({
+      task: description,
+      cwd,
+      team,
+      plannerAgentName,
+      round1Reports: round1ReportInputs,
+      originalPlan: originalPlanEntries,
+      allowedAssignees,
+      eventsPath: join(taskDir(taskId), "refix-planner-events.jsonl"),
+      inlineAgents,
+      ...(repos ? { repos } : {}),
+    });
+
+    if (refixPlan.subTasks.length === 0) {
+      refixSkipReason = refixPlan.overallStrategy;
+      if (workspace) {
+        await cmuxLog({
+          workspace,
+          source: "agent-teams",
+          message: `no refix needed: ${truncate(refixPlan.overallStrategy, 120)}`,
+        });
+      }
+    } else {
+      // Warn (fail open) if Sage reassigned to an agent not in round 1.
+      const round1Agents = new Set(round1Entries.map((e) => e.plan.assignedAgent));
+      for (const sub of refixPlan.subTasks) {
+        if (!round1Agents.has(sub.assignedAgent) && workspace) {
+          await cmuxLog({
+            workspace,
+            source: "agent-teams",
+            level: "warn",
+            message: `refix sub-task "${sub.title}" assigned to ${sub.assignedAgent} (not present in round 1)`,
+          });
+        }
+      }
+
+      // ===== Round 2 =====
+      round2Entries = prepareRound({ storage, taskId, plan: refixPlan, round: 2 });
+
+      const round1PlanIdToUlid = new Map<string, string>();
+      for (const e of round1Entries) round1PlanIdToUlid.set(e.plan.id, e.id);
+      const round2PlanIdToUlid = new Map<string, string>();
+      for (const e of round2Entries) round2PlanIdToUlid.set(e.plan.id, e.id);
+
+      writeTaskSnapshot({
+        id: taskId,
+        description,
+        cwd,
+        team: team.name,
+        status: "running",
+        workspace: ws?.name ?? null,
+        repos: ws ? ws.repos : null,
+        subTasks: [
+          ...round1Entries.map((e) => ({
+            id: e.id,
+            title: e.plan.title,
+            assignedAgent: e.plan.assignedAgent,
+            status: storage.getSubTaskStatus(e.id),
+            targetRepo: e.plan.targetRepo ?? null,
+            dependsOn: (e.plan.dependsOn ?? [])
+              .map((d) => round1PlanIdToUlid.get(d))
+              .filter((x): x is string => Boolean(x)),
+            round: 1 as const,
+          })),
+          ...round2Entries.map((e) => ({
+            id: e.id,
+            title: e.plan.title,
+            assignedAgent: e.plan.assignedAgent,
+            status: "pending" as const,
+            targetRepo: e.plan.targetRepo ?? null,
+            dependsOn: (e.plan.dependsOn ?? [])
+              .map((d) => round2PlanIdToUlid.get(d))
+              .filter((x): x is string => Boolean(x)),
+            round: 2 as const,
+          })),
+        ],
+        createdAt: Date.now(),
+        completedAt: null,
+      });
+
+      if (workspace) {
+        await setStatus({
+          workspace,
+          key: "agent-teams",
+          value: `refix 0/${round2Entries.length}`,
+          icon: "arrow.clockwise",
+        });
+      }
+
+      await runRoundDag({
+        entries: round2Entries,
+        storage, taskId, ws, cwd, team, inlineAgents,
+        originalTaskDescription: description,
+        maxParallel,
+        workspace,
+        round: 2,
+      });
+    }
+  }
+
+  return { round2Entries, refixSkipReason };
+}
+
+export async function runSummaryPhase(params: {
+  storage: Storage;
+  taskId: string;
+  description: string;
+  cwd: string;
+  team: Team;
+  inlineAgents: Record<string, InlineAgentDefinition>;
+  plannerAgentName: string;
+  round1Entries: SubTaskEntry[];
+  round2Entries: SubTaskEntry[];
+  roleOf: (name: string) => string | undefined;
+  refixSkipReason: string | undefined;
+  repos: Workspace["repos"] | undefined;
+}): Promise<{
+  status: "completed" | "failed";
+  subTaskReports: Array<{
+    id: string;
+    title: string;
+    agent: string;
+    role?: string;
+    status: SubTaskStatus;
+    report: string;
+    targetRepo: string | null;
+    round: 1 | 2;
+  }>;
+}> {
+  const {
+    storage,
+    taskId,
+    description,
+    cwd,
+    team,
+    inlineAgents,
+    plannerAgentName,
+    round1Entries,
+    round2Entries,
+    roleOf,
+    refixSkipReason,
+    repos,
+  } = params;
+
+  const allEntries: Array<{ entry: SubTaskEntry; round: 1 | 2 }> = [
+    ...round1Entries.map((e) => ({ entry: e, round: 1 as const })),
+    ...round2Entries.map((e) => ({ entry: e, round: 2 as const })),
+  ];
+
+  const subTaskReports = allEntries.map(({ entry, round }) => {
+    const role = roleOf(entry.plan.assignedAgent);
+    return {
+      id: entry.id,
+      title: entry.plan.title,
+      agent: entry.plan.assignedAgent,
+      ...(role ? { role } : {}),
+      status: storage.getSubTaskStatus(entry.id),
+      report: readReport(taskId, entry.id) ?? "",
+      targetRepo: entry.plan.targetRepo ?? null,
+      round,
+    };
+  });
+
+  const summary = await runSummarizer({
+    task: description,
+    cwd,
+    team,
+    subTaskReports,
+    plannerAgentName,
+    eventsPath: join(taskDir(taskId), "summarizer-events.jsonl"),
+    inlineAgents,
+    ...(refixSkipReason ? { refixSkipReason } : {}),
+    ...(repos ? { repos } : {}),
+  });
+  writeSummary(taskId, summary.summary);
+
+  const failed = subTaskReports.some((r) => r.status === "failed");
+  const status: "completed" | "failed" = failed ? "failed" : "completed";
+  storage.updateTaskStatus(taskId, status, Date.now());
+
+  return { status, subTaskReports };
 }
 
 export function prepareRound(params: {
