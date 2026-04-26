@@ -135,3 +135,96 @@ describe("resume_lock column migration", () => {
     storage.close();
   });
 });
+
+describe("resume_lock and findResumableTaskId", () => {
+  let dir: string;
+  let dbFile: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "agent-teams-lock-"));
+    dbFile = join(dir, "db.sqlite");
+  });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  function makeTask(s: Storage, id: string, status: string, createdAt: number, opts?: { pbi?: boolean }) {
+    s.insertTask({
+      id, description: "d", cwd: "/w", team_name: "t",
+      status: status as any, created_at: createdAt,
+      ...(opts?.pbi ? { pbi_state: { stage: "interview" } } : {}),
+    });
+  }
+
+  it("acquireResumeLock succeeds when lock is null", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "t1", "failed", 100);
+    const lock = { pid: 999, host: "h", started_at: Date.now() };
+    expect(s.acquireResumeLock("t1", lock, 30 * 60 * 1000)).toBe(true);
+    s.close();
+  });
+
+  it("acquireResumeLock fails when lock is held within stale threshold", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "t1", "failed", 100);
+    const now = Date.now();
+    s.acquireResumeLock("t1", { pid: 1, host: "h", started_at: now }, 30 * 60 * 1000);
+    expect(s.acquireResumeLock("t1", { pid: 2, host: "h", started_at: now }, 30 * 60 * 1000)).toBe(false);
+    s.close();
+  });
+
+  it("acquireResumeLock overrides stale lock past threshold", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "t1", "failed", 100);
+    s.acquireResumeLock("t1", { pid: 1, host: "h", started_at: 1000 }, 100);
+    // 100ms threshold; original lock is far older than threshold relative to "now"
+    expect(s.acquireResumeLock("t1", { pid: 2, host: "h", started_at: Date.now() }, 100)).toBe(true);
+    s.close();
+  });
+
+  it("acquireResumeLock with force overrides any existing lock", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "t1", "failed", 100);
+    s.acquireResumeLock("t1", { pid: 1, host: "h", started_at: Date.now() }, 30 * 60 * 1000);
+    expect(s.acquireResumeLock("t1", { pid: 2, host: "h", started_at: Date.now() }, 30 * 60 * 1000, { force: true })).toBe(true);
+    s.close();
+  });
+
+  it("releaseResumeLock only clears when pid matches", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "t1", "failed", 100);
+    s.acquireResumeLock("t1", { pid: 1, host: "h", started_at: Date.now() }, 30 * 60 * 1000);
+    s.releaseResumeLock("t1", 999); // wrong pid
+    const stillLocked = (s.db.prepare("SELECT resume_lock FROM tasks WHERE id = 't1'").get() as { resume_lock: string | null }).resume_lock;
+    expect(stillLocked).not.toBeNull();
+    s.releaseResumeLock("t1", 1); // correct pid
+    const cleared = (s.db.prepare("SELECT resume_lock FROM tasks WHERE id = 't1'").get() as { resume_lock: string | null }).resume_lock;
+    expect(cleared).toBeNull();
+    s.close();
+  });
+
+  it("findResumableTaskId returns most recent failed/running, excluding awaiting_user_input and PBI", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "old", "failed", 100);
+    makeTask(s, "new", "running", 200);
+    makeTask(s, "pbi", "running", 300, { pbi: true });
+    makeTask(s, "awaiting", "awaiting_user_input", 400);
+    makeTask(s, "completed", "completed", 500);
+    expect(s.findResumableTaskId()).toBe("new");
+    s.close();
+  });
+
+  it("findResumableTaskId returns null when no candidates", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "completed", "completed", 100);
+    expect(s.findResumableTaskId()).toBeNull();
+    s.close();
+  });
+
+  it("countResumableTasks returns the number of candidates", () => {
+    const s = new Storage(dbFile);
+    makeTask(s, "a", "failed", 100);
+    makeTask(s, "b", "running", 200);
+    makeTask(s, "c", "running", 300, { pbi: true });
+    expect(s.countResumableTasks()).toBe(2);
+    s.close();
+  });
+});

@@ -35,6 +35,12 @@ export interface SubTaskRow {
   round: number;
 }
 
+export interface ResumeLock {
+  pid: number;
+  host: string;
+  started_at: number;
+}
+
 export interface AgentRunRow {
   id: string;
   sub_task_id: string;
@@ -166,6 +172,75 @@ export class Storage {
         `UPDATE tasks SET status = ?, completed_at = ? WHERE id = ?`,
       )
       .run(status, completedAt ?? null, id);
+  }
+
+  acquireResumeLock(
+    taskId: string,
+    lock: ResumeLock,
+    staleThresholdMs: number,
+    opts?: { force?: boolean },
+  ): boolean {
+    const now = Date.now();
+    const staleBefore = now - staleThresholdMs;
+    const lockJson = JSON.stringify(lock);
+
+    if (opts?.force) {
+      const result = this.db
+        .prepare(`UPDATE tasks SET resume_lock = ? WHERE id = ?`)
+        .run(lockJson, taskId);
+      return result.changes > 0;
+    }
+
+    const result = this.db
+      .prepare(
+        `UPDATE tasks SET resume_lock = ?
+         WHERE id = ?
+           AND (resume_lock IS NULL
+                OR CAST(json_extract(resume_lock, '$.started_at') AS INTEGER) < ?)`,
+      )
+      .run(lockJson, taskId, staleBefore);
+    return result.changes > 0;
+  }
+
+  releaseResumeLock(taskId: string, pid: number): void {
+    this.db
+      .prepare(
+        `UPDATE tasks SET resume_lock = NULL
+         WHERE id = ?
+           AND CAST(json_extract(resume_lock, '$.pid') AS INTEGER) = ?`,
+      )
+      .run(taskId, pid);
+  }
+
+  readResumeLock(taskId: string): ResumeLock | null {
+    const row = this.db
+      .prepare(`SELECT resume_lock FROM tasks WHERE id = ?`)
+      .get(taskId) as { resume_lock: string | null } | undefined;
+    if (!row?.resume_lock) return null;
+    return JSON.parse(row.resume_lock) as ResumeLock;
+  }
+
+  findResumableTaskId(): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT id FROM tasks
+         WHERE status IN ('running', 'failed')
+           AND pbi_state IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get() as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  countResumableTasks(): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM tasks
+         WHERE status IN ('running', 'failed') AND pbi_state IS NULL`,
+      )
+      .get() as { n: number };
+    return row.n;
   }
 
   insertSubTask(
