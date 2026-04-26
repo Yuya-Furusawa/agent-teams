@@ -1,5 +1,5 @@
-import { appendFileSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, readdirSync, unlinkSync } from "node:fs";
+import { dirname, basename, join } from "node:path";
 import {
   agentDir,
   eventsFile,
@@ -81,4 +81,29 @@ export function writeSummary(taskId: string, content: string): void {
   const path = summaryFile(taskId);
   ensureDir(path);
   writeFileSync(path, content, "utf8");
+}
+
+/**
+ * Rename `path` to `<path>.backup-<unix-ms>` and prune older backups so that at
+ * most `keep` survive. Returns the new backup path, or null if the source file
+ * does not exist (treated as a no-op).
+ */
+export function rotateBackup(path: string, keep: number): string | null {
+  if (!existsSync(path)) return null;
+  const ts = Date.now();
+  const newPath = `${path}.backup-${ts}`;
+  renameSync(path, newPath);
+
+  const dir = dirname(path);
+  const prefix = `${basename(path)}.backup-`;
+  const all = readdirSync(dir)
+    .filter((f) => f.startsWith(prefix))
+    .map((f) => ({ name: f, ts: Number(f.slice(prefix.length)) }))
+    .filter((x) => Number.isFinite(x.ts))
+    .sort((a, b) => b.ts - a.ts); // newest first
+
+  for (const old of all.slice(keep)) {
+    unlinkSync(join(dir, old.name));
+  }
+  return newPath;
 }
