@@ -14,6 +14,7 @@ import {
   taskDir,
   writeSummary,
   writeTaskSnapshot,
+  type DesignState,
   type SubTaskStatus,
 } from "@agent-teams/storage";
 import type { InlineAgentDefinition } from "@agent-teams/agent-runner";
@@ -78,7 +79,7 @@ export interface RunTaskOptions {
 export interface RunTaskResult {
   taskId: string;
   summaryPath: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "awaiting_user_input";
 }
 
 export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
@@ -337,6 +338,34 @@ export async function runTask(opts: RunTaskOptions): Promise<RunTaskResult> {
       status,
     };
   } catch (err) {
+    if (err instanceof DesignCheckpointReached) {
+      const state: DesignState = {
+        phase: "awaiting_design_approval",
+        designer_sub_task_id: err.designerSubTaskId,
+        iteration: 1,
+        completed_sub_task_ids: [...err.completedIds],
+        last_checkpoint: {
+          modified_files: err.checkpoint.modified_files,
+          summary: err.checkpoint.summary,
+          preview_images: err.checkpoint.preview_images,
+        },
+      };
+      storage.updateDesignState(taskId, state);
+      storage.updateTaskStatus(taskId, "awaiting_user_input");
+      if (workspace) {
+        await cmuxLog({
+          workspace,
+          source: "agent-teams",
+          message: `task ${taskId}: awaiting design approval (${err.checkpoint.modified_files.length} files)`,
+        });
+        await clearStatus({ workspace, key: "agent-teams" }).catch(() => {});
+      }
+      process.stdout.write(`STATUS: awaiting_design_approval\n`);
+      process.stdout.write(`TASK_ID: ${taskId}\n`);
+      process.stdout.write(`ITERATION: 1\n`);
+      process.stdout.write("```json\n" + JSON.stringify(err.checkpoint, null, 2) + "\n```\n");
+      return { taskId, summaryPath: "", status: "awaiting_user_input" };
+    }
     storage.updateTaskStatus(taskId, "failed", Date.now());
     if (workspace) {
       await setStatus({
