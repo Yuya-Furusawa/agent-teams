@@ -101,3 +101,37 @@ describe("PBI state column", () => {
     }
   });
 });
+
+describe("resume_lock column migration", () => {
+  let dir: string;
+  let dbFile: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "agent-teams-storage-"));
+    dbFile = join(dir, "db.sqlite");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("adds resume_lock column to legacy DB and defaults existing rows to NULL", () => {
+    const legacy = new Database(dbFile);
+    legacy.exec(`
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, description TEXT NOT NULL, cwd TEXT NOT NULL,
+        team_name TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, completed_at INTEGER);
+      INSERT INTO tasks VALUES ('t1','d','/w','default','failed',100,200);
+    `);
+    legacy.close();
+
+    const storage = new Storage(dbFile);
+    const cols = storage.db.pragma("table_info(tasks)") as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("resume_lock");
+
+    const row = storage.db
+      .prepare("SELECT resume_lock FROM tasks WHERE id = 't1'")
+      .get() as { resume_lock: string | null };
+    expect(row.resume_lock).toBeNull();
+    storage.close();
+  });
+});

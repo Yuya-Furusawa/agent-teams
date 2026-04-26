@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   completed_at INTEGER,
   workspace_name TEXT,
   repos TEXT,
-  pbi_state TEXT
+  pbi_state TEXT,
+  resume_lock TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sub_tasks (
@@ -112,6 +113,9 @@ export class Storage {
     }
     if (!taskColNames.has("pbi_state")) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN pbi_state TEXT`);
+    }
+    if (!taskColNames.has("resume_lock")) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN resume_lock TEXT`);
     }
     const subCols = this.db.pragma("table_info(sub_tasks)") as Array<{ name: string }>;
     const subColNames = new Set(subCols.map((c) => c.name));
