@@ -31,3 +31,9 @@ export {
   type Repo,
   type Workspace,
 } from "./workspace.js";
+export {
+  resumeTask,
+  type ResumeTaskOptions,
+  type ResumeTaskResult,
+  type ResumeStage,
+} from "./resume-runner.js";

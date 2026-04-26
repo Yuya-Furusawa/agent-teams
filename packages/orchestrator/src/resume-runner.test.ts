@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { determineResumeStage } from "./resume-runner.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Storage } from "@agent-teams/storage";
+import { determineResumeStage, resumeTask } from "./resume-runner.js";
 import type { SubTaskRow } from "@agent-teams/storage";
 
 function sub(overrides: Partial<SubTaskRow>): SubTaskRow {
@@ -57,5 +61,68 @@ describe("determineResumeStage", () => {
         roleOf,
       ),
     ).toBe("noop");
+  });
+});
+
+describe("resumeTask entry", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "agent-teams-resume-entry-"));
+    process.env.AGENT_TEAMS_HOME = join(tmp, "home");
+    process.env.AGENT_TEAMS_AGENTS_DIR = join(tmp, "agents");
+    mkdirSync(join(tmp, "agents"), { recursive: true });
+    writeFileSync(join(tmp, "agents", "Sage.md"),
+      `---\nname: Sage\nrole: team-planner\n---\nx`);
+    writeFileSync(join(tmp, "agents", "Kai.md"),
+      `---\nname: Kai\nrole: implementer\n---\nx`);
+    writeFileSync(join(tmp, "agent-team.yaml"),
+      `name: t\nplanner: Sage\nworkers: [Kai]\n`);
+    process.chdir(tmp);
+  });
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  it("throws 'no resumable task found' when no failed/running tasks exist", async () => {
+    await expect(resumeTask()).rejects.toThrow(/no resumable task found/);
+  });
+
+  it("rejects PBI tasks with pbi_state set", async () => {
+    const s = new Storage();
+    s.insertTask({
+      id: "t-pbi", description: "d", cwd: tmp, team_name: "t",
+      status: "running", created_at: Date.now(),
+      pbi_state: { stage: "draft" },
+    });
+    s.close();
+    await expect(resumeTask({ taskId: "t-pbi" })).rejects.toThrow(/pbi-resume/);
+  });
+
+  it("rejects already-completed taskId", async () => {
+    const s = new Storage();
+    s.insertTask({
+      id: "t-done", description: "d", cwd: tmp, team_name: "t",
+      status: "completed", created_at: Date.now(), completed_at: Date.now(),
+    });
+    s.close();
+    await expect(resumeTask({ taskId: "t-done" })).rejects.toThrow(/already completed/);
+  });
+
+  it("noop dispatch corrects status when state is fully completed but tasks.status='failed'", async () => {
+    const s = new Storage();
+    s.insertTask({
+      id: "t-noop", description: "d", cwd: tmp, team_name: "t",
+      status: "failed", created_at: Date.now(),
+    });
+    s.insertSubTask({
+      id: "sub1", task_id: "t-noop", title: "x", prompt: "p",
+      assigned_agent: "Kai", status: "completed", created_at: Date.now(),
+    });
+    s.close();
+    mkdirSync(join(tmp, "home", "tasks", "t-noop"), { recursive: true });
+    writeFileSync(join(tmp, "home", "tasks", "t-noop", "summary.md"), "ok", "utf8");
+
+    const result = await resumeTask({ taskId: "t-noop" });
+    expect(result.stage).toBe("noop");
+    expect(result.status).toBe("completed");
   });
 });
